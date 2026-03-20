@@ -150,4 +150,130 @@ describe("executeTalkToFigmaSessionQueue", () => {
     expect(snapshot?.nodes[0]?.id).toBe("node-created");
     expect(executeCommand).toHaveBeenCalled();
   });
+  it("propagates skipped status and batches through the queue pipeline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "figma-control-talk-queue-skip-"));
+    const store = new BridgeStore(join(dir, "bridge-state.json"));
+    await store.init();
+
+    await store.registerSession({
+      sessionId: "talk-to-figma:skip-room",
+      fileName: "SkipTest",
+      metadata: {
+        source: "talk-to-figma",
+        channel: "skip-room"
+      }
+    });
+
+    // Enqueue two operations that share a batchId
+    await store.enqueueOperations({
+      sessionId: "talk-to-figma:skip-room",
+      operations: [
+        {
+          type: "create_node",
+          node: { type: "FRAME", name: "Will fail" }
+        },
+        {
+          type: "set_selection",
+          selectionIds: ["1:1"]
+        }
+      ]
+    });
+
+    // First operation fails, second should be skipped
+    const executeCommand = vi.fn(async (input: {
+      command: string;
+      params?: Record<string, unknown>;
+    }) => {
+      if (input.command === "get_variables") {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "skip-room",
+          joinedAt: "2026-03-20T00:00:00.000Z",
+          requestId: "req-vars",
+          command: "get_variables",
+          result: [],
+          progressUpdates: []
+        };
+      }
+
+      const code = typeof input.params?.code === "string" ? input.params.code : "";
+
+      // create_node fails
+      if (code.includes('"type":"create_node"')) {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "skip-room",
+          joinedAt: "2026-03-20T00:00:00.000Z",
+          requestId: "req-fail",
+          command: "execute_code",
+          result: { success: false, error: "Runtime error: node creation blocked" },
+          progressUpdates: []
+        };
+      }
+
+      // Undo command
+      if (code.includes("figma.commitUndo()") || code.includes("undo")) {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "skip-room",
+          joinedAt: "2026-03-20T00:00:00.000Z",
+          requestId: "req-undo",
+          command: "execute_code",
+          result: { success: true, result: { ok: true } },
+          progressUpdates: []
+        };
+      }
+
+      // Sync snapshot (fallback)
+      return {
+        ok: true as const,
+        wsUrl: "ws://127.0.0.1:3055",
+        channel: "skip-room",
+        joinedAt: "2026-03-20T00:00:00.000Z",
+        requestId: "req-sync",
+        command: "execute_code",
+        result: {
+          success: true,
+          result: {
+            fileKey: "file-key-1",
+            fileName: "SkipTest",
+            pageId: "0:1",
+            pageName: "Page 1",
+            selectionIds: [],
+            nodes: [],
+            components: []
+          }
+        },
+        progressUpdates: []
+      };
+    });
+
+    const result = await executeTalkToFigmaSessionQueue({
+      store,
+      sessionId: "talk-to-figma:skip-room",
+      client: { executeCommand }
+    });
+
+    // Verify batches are present
+    expect(result.batches).toBeDefined();
+    expect(Array.isArray(result.batches)).toBe(true);
+    expect(result.batches.length).toBeGreaterThanOrEqual(1);
+
+    // The batch should not be "succeeded" since the first operation failed
+    const batch = result.batches[0]!;
+    expect(batch.status).not.toBe("succeeded");
+    expect(batch.rollbackAttempted).toBe(true);
+
+    // Both updates should be present — at least one status is "failed" or "skipped"
+    const statuses = result.updates.map((u) => u.status);
+    expect(statuses).toContain("failed");
+
+    // Verify acknowledged records survive the store boundary
+    for (const ack of result.acknowledged) {
+      expect(["failed", "skipped"]).toContain(ack.status);
+    }
+  });
 });

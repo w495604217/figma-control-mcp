@@ -359,4 +359,91 @@ describe("PluginBridgeClient", () => {
     expect(result.snapshotSynced).toBe(true);
     expect(result.acknowledged[0]?.status).toBe("succeeded");
   });
+  it("includes batches in executeTalkToFigmaQueue response", async () => {
+    const { client, store } = await createClientHarness();
+
+    await store.registerSession({
+      sessionId: "talk-to-figma:batches-room",
+      metadata: {
+        source: "talk-to-figma",
+        channel: "batches-room"
+      }
+    });
+
+    await store.enqueueOperations({
+      sessionId: "talk-to-figma:batches-room",
+      operations: [
+        {
+          type: "create_node",
+          node: {
+            type: "FRAME",
+            name: "Batch test"
+          }
+        }
+      ]
+    });
+
+    const talkServer = await createTalkToFigmaTestServer({
+      commandHandler: (command, params) => {
+        if (command === "get_variables") {
+          return [];
+        }
+        const code = typeof params.code === "string" ? params.code : "";
+        if (code.includes("figma.commitUndo()")) {
+          return { success: true, result: { ok: true } };
+        }
+        if (code.includes('"type":"create_node"')) {
+          return {
+            success: true,
+            result: {
+              touchedNodeIds: ["node-batches"],
+              result: {
+                createdNodeId: "node-batches"
+              }
+            }
+          };
+        }
+        return {
+          success: true,
+          result: {
+            fileKey: "file-key-1",
+            fileName: "Landing",
+            pageId: "0:1",
+            pageName: "Page 1",
+            selectionIds: [],
+            nodes: [
+              {
+                id: "node-batches",
+                name: "Batch test",
+                type: "FRAME",
+                parentId: "0:1",
+                childIds: []
+              }
+            ],
+            components: []
+          }
+        };
+      }
+    });
+
+    const result = await client.executeTalkToFigmaQueue({
+      sessionId: "talk-to-figma:batches-room",
+      wsUrl: talkServer.wsUrl
+    });
+
+    await talkServer.close();
+
+    // Verify batches is present and has structured content
+    expect(result.batches).toBeDefined();
+    expect(Array.isArray(result.batches)).toBe(true);
+    expect(result.batches.length).toBeGreaterThanOrEqual(1);
+
+    const batch = result.batches[0]!;
+    expect(batch.batchId).toBeDefined();
+    expect(batch.status).toBe("succeeded");
+    expect(batch.rollbackAttempted).toBe(false);
+    expect(batch.succeededIds).toBeDefined();
+    expect(batch.failedIds).toEqual([]);
+    expect(batch.skippedIds).toEqual([]);
+  });
 });

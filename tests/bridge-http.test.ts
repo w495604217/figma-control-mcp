@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -426,5 +426,117 @@ describe("BridgeHttpServer", () => {
     expect(payload.snapshotSynced).toBe(true);
     expect(payload.acknowledged[0]?.status).toBe("succeeded");
     expect(payload.acknowledged[0]?.result?.createdNodeId).toBe("node-created");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // E2E: Trace emission, retrieval, and persist/reload lifecycle
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it("ensure-session emits a trace retrievable via GET /bridge/traces and survives store reload", async () => {
+    // ── Step 1: run ensure-session via REST (produces a trace) ────────────
+    const dir = await mkdtemp(join(tmpdir(), "figma-control-http-traces-"));
+    const stateFile = join(dir, "bridge-state.json");
+    const store = new BridgeStore(stateFile);
+    await store.init();
+    const server = new BridgeHttpServer(store, { port: 0 });
+    const address = await server.start();
+    const baseUrl = `http://${address.host}:${address.port}`;
+    startedServers.push(server);
+
+    const talkServer = await createTalkToFigmaTestServer({
+      commandResults: {
+        execute_code: {
+          fileKey: "trace-file-key",
+          fileName: "TraceTestFile",
+          pageId: "0:1",
+          pageName: "Page 1",
+          selectionIds: [],
+          nodes: []
+        },
+        get_local_components: {
+          count: 0,
+          components: []
+        },
+        get_variables: []
+      }
+    });
+
+    await store.registerSession({
+      sessionId: "talk-to-figma:trace-ch",
+      metadata: {
+        source: "talk-to-figma",
+        channel: "trace-ch",
+        wsUrl: talkServer.wsUrl
+      }
+    });
+
+    const ensureRes = await fetch(`${baseUrl}/bridge/talk-to-figma/ensure-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "talk-to-figma:trace-ch",
+        timeoutMs: 4000
+      })
+    });
+    expect(ensureRes.status).toBe(200);
+
+    await talkServer.close();
+
+    // ── Step 2: GET /bridge/traces returns the trace ──────────────────────
+    const tracesListRes = await fetch(`${baseUrl}/bridge/traces`);
+    expect(tracesListRes.status).toBe(200);
+    const tracesList = (await tracesListRes.json()) as {
+      traces: Array<{ traceId: string; flowType: string; status: string }>;
+      count: number;
+    };
+    expect(tracesList.count).toBeGreaterThanOrEqual(1);
+
+    const sessionTrace = tracesList.traces.find((t) => t.flowType === "ensure-session");
+    expect(sessionTrace).toBeDefined();
+    expect(sessionTrace!.status).toBe("succeeded");
+
+    // ── Step 3: GET /bridge/traces/:traceId returns the single trace ─────
+    const singleRes = await fetch(`${baseUrl}/bridge/traces/${sessionTrace!.traceId}`);
+    expect(singleRes.status).toBe(200);
+    const singleTrace = (await singleRes.json()) as { traceId: string; flowType: string };
+    expect(singleTrace.traceId).toBe(sessionTrace!.traceId);
+    expect(singleTrace.flowType).toBe("ensure-session");
+
+    // ── Step 4: GET /bridge/traces?flowType=ensure-session filters ───────
+    const filteredRes = await fetch(`${baseUrl}/bridge/traces?flowType=ensure-session`);
+    const filtered = (await filteredRes.json()) as { traces: Array<{ flowType: string }>; count: number };
+    expect(filtered.count).toBeGreaterThanOrEqual(1);
+    expect(filtered.traces.every((t) => t.flowType === "ensure-session")).toBe(true);
+
+    // ── Step 5: Verify traces.json exists on disk ────────────────────────
+    const tracesPath = join(dir, "traces.json");
+    const rawTraces = await readFile(tracesPath, "utf8");
+    const diskTraces = JSON.parse(rawTraces) as Array<{ traceId: string }>;
+    expect(diskTraces.length).toBeGreaterThanOrEqual(1);
+    expect(diskTraces.some((t) => t.traceId === sessionTrace!.traceId)).toBe(true);
+
+    // ── Step 6: Restart — new BridgeStore + BridgeHttpServer ─────────────
+    await server.close();
+    startedServers.splice(startedServers.indexOf(server), 1);
+
+    const store2 = new BridgeStore(stateFile);
+    await store2.init();
+    const server2 = new BridgeHttpServer(store2, { port: 0 });
+    const address2 = await server2.start();
+    const baseUrl2 = `http://${address2.host}:${address2.port}`;
+    startedServers.push(server2);
+
+    // ── Step 7: GET /bridge/traces on the new server still has the trace ─
+    const reloadRes = await fetch(`${baseUrl2}/bridge/traces`);
+    expect(reloadRes.status).toBe(200);
+    const reloaded = (await reloadRes.json()) as {
+      traces: Array<{ traceId: string; flowType: string; status: string }>;
+      count: number;
+    };
+    expect(reloaded.count).toBeGreaterThanOrEqual(1);
+    const found = reloaded.traces.find((t) => t.traceId === sessionTrace!.traceId);
+    expect(found).toBeDefined();
+    expect(found!.flowType).toBe("ensure-session");
+    expect(found!.status).toBe("succeeded");
   });
 });

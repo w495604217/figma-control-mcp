@@ -215,13 +215,70 @@ export class FigmaAdapter implements ExecutorAdapter {
       }
     }
 
+    const applied: string[] = [];
+    const warnings: Array<{ property: string; reason: string }> = [];
+
+    // Variant and component properties via setProperties()
+    const propsToSet: Record<string, string | boolean> = {};
+    if (input.variantProperties) {
+      for (const [key, value] of Object.entries(input.variantProperties)) {
+        propsToSet[key] = value;
+      }
+    }
+    if (input.componentProperties) {
+      for (const [key, value] of Object.entries(input.componentProperties)) {
+        propsToSet[key] = value;
+      }
+    }
+
+    for (const [propName, propValue] of Object.entries(propsToSet)) {
+      try {
+        instance.setProperties({ [propName]: propValue });
+        applied.push(propName);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        warnings.push({ property: propName, reason: message });
+      }
+    }
+
+    // Text overrides via child name walk
+    if (input.textOverrides) {
+      for (const [childName, newText] of Object.entries(input.textOverrides)) {
+        try {
+          const found = instance.findOne((n: SceneNode) => n.type === "TEXT" && n.name === childName) as TextNode | null;
+          if (!found) {
+            warnings.push({
+              property: `textOverride:${childName}`,
+              reason: `Text node with name '${childName}' was not found in instance`
+            });
+          } else {
+            if (found.fontName === figma.mixed) {
+              throw new Error("Cannot override text with mixed fonts");
+            }
+            await figma.loadFontAsync(found.fontName);
+            found.characters = newText;
+            applied.push(`textOverride:${childName}`);
+          }
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          warnings.push({ property: `textOverride:${childName}`, reason: message });
+        }
+      }
+    }
+
+    const result: Record<string, unknown> = {
+      createdNodeId: instance.id,
+      sourceComponentId: component.id,
+      sourceComponentKey: component.key || input.componentKey
+    };
+
+    if (applied.length > 0 || warnings.length > 0) {
+      result.overrideResults = { applied, warnings };
+    }
+
     return {
       touchedNodeIds: [instance.id],
-      result: {
-        createdNodeId: instance.id,
-        sourceComponentId: component.id,
-        sourceComponentKey: component.key || input.componentKey
-      }
+      result
     };
   }
 

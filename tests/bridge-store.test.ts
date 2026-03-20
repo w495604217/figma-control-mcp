@@ -222,4 +222,51 @@ describe("BridgeStore", () => {
     expect(resolved.componentId).toBeUndefined();
     expect(resolved.componentKey).toBe("remote-key");
   });
+  it("acknowledges a skipped operation and persists it", async () => {
+    const store = await createStore();
+    await store.registerSession({ sessionId: "session-skip" });
+
+    const queued = await store.enqueueOperations({
+      sessionId: "session-skip",
+      operations: [
+        {
+          type: "create_node",
+          node: { type: "FRAME", name: "First" }
+        },
+        {
+          type: "set_selection",
+          selectionIds: ["1:1"]
+        }
+      ]
+    });
+
+    const dispatched = await store.pullQueuedOperations("session-skip", 10);
+    expect(dispatched).toHaveLength(2);
+
+    // Acknowledge first as failed, second as skipped (never executed)
+    const acked = await store.acknowledgeOperations({
+      sessionId: "session-skip",
+      updates: [
+        {
+          operationId: dispatched[0]!.operationId,
+          status: "failed",
+          error: "Permission denied"
+        },
+        {
+          operationId: dispatched[1]!.operationId,
+          status: "skipped",
+          error: "Batch failed before this operation was executed"
+        }
+      ]
+    });
+
+    expect(acked[0]?.status).toBe("failed");
+    expect(acked[1]?.status).toBe("skipped");
+    expect(acked[1]?.error).toContain("before this operation");
+
+    // Verify status persists through getStatus
+    const statusResult = await store.getStatus("session-skip");
+    const skippedOp = statusResult.operations.find((op) => op.operationId === dispatched[1]!.operationId);
+    expect(skippedOp?.status).toBe("skipped");
+  });
 });

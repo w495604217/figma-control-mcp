@@ -62,7 +62,7 @@ export class PluginBridgeClient {
     sessionId: string,
     updates: Array<{
       operationId: string;
-      status: "dispatched" | "succeeded" | "failed";
+      status: "dispatched" | "succeeded" | "failed" | "skipped";
       error?: string;
       result?: JsonRecord;
       touchedNodeIds?: string[];
@@ -384,15 +384,27 @@ export class PluginBridgeClient {
     attempts?: number;
     delayMs?: number;
     forceLaunch?: boolean;
+    staleThresholdMs?: number;
   }): Promise<{
     strategy: string;
+    sessionHealth: "active" | "stale" | "unreachable" | "unknown";
     session: FigmaSession;
     snapshot: FigmaSnapshot;
     channel: string;
     wsUrl?: string;
+    snapshotAge?: number;
     launch?: Record<string, unknown>;
     discovered?: Record<string, unknown>;
-    attempts: Array<Record<string, unknown>>;
+    attempts: Array<{
+      strategy: string;
+      ok: boolean;
+      health: "active" | "stale" | "unreachable" | "unknown";
+      sessionId?: string;
+      channel?: string;
+      error?: string;
+      staleSince?: string;
+      snapshotAge?: number;
+    }>;
   }> {
     return this.request("/bridge/talk-to-figma/ensure-session", {
       method: "POST",
@@ -409,9 +421,22 @@ export class PluginBridgeClient {
   }): Promise<{
     sessionId: string;
     channel: string;
+    sessionHealth: "active" | "stale" | "unreachable" | "unknown";
     pulledCount: number;
     processedCount: number;
     updates: Array<Record<string, unknown>>;
+    batches: Array<{
+      batchId: string;
+      status: "succeeded" | "partially_failed" | "fully_failed";
+      failedOperationId?: string;
+      failureMessage?: string;
+      rollbackAttempted: boolean;
+      rollbackSucceeded?: boolean;
+      rollbackError?: string;
+      succeededIds: string[];
+      failedIds: string[];
+      skippedIds: string[];
+    }>;
     acknowledged: FigmaOperationRecord[];
     snapshotSynced: boolean;
   }> {

@@ -31,6 +31,10 @@ const SUPPORTED_SHARED_PATCH_FIELDS = new Set([
   "fontSize"
 ]);
 
+// ---------------------------------------------------------------------------
+// Resolution result types
+// ---------------------------------------------------------------------------
+
 type ResolutionIssue = {
   index: number;
   message: string;
@@ -47,6 +51,12 @@ type ResolutionSummary = {
   resolvedNodeId?: string;
   resolvedParentId?: string;
   resolvedVariableId?: string;
+  /** Original selector string that was resolved. */
+  selectorUsed?: string;
+  /** Number of nodes that matched the final path segment. */
+  matchCount?: number;
+  /** IDs of all candidates when matchCount > 1 (ambiguity). */
+  matchedNodeIds?: string[];
 };
 
 type ResolvedBatchResult = {
@@ -56,6 +66,10 @@ type ResolvedBatchResult = {
   notes: ResolutionNote[];
   resolutions: ResolutionSummary[];
 };
+
+// ---------------------------------------------------------------------------
+// Snapshot index
+// ---------------------------------------------------------------------------
 
 type SnapshotIndex = {
   nodeMap: Map<string, FigmaNode>;
@@ -77,77 +91,285 @@ function getChildren(index: SnapshotIndex, parent: FigmaNode | undefined): Figma
     .filter((node): node is FigmaNode => Boolean(node));
 }
 
-function parsePathSegment(segment: string): { matcher: string; occurrence: number } {
+// ---------------------------------------------------------------------------
+// Selector parsing
+// ---------------------------------------------------------------------------
+
+type ParsedSegment = {
+  /** Name matcher: literal name, "*" for wildcard, or "#id" for direct id. */
+  matcher: string;
+  /** Node type filter (uppercase), e.g. "FRAME", "TEXT". Undefined = any type. */
+  typeFilter?: string;
+  /** 1-indexed occurrence within matches. 0 means "not specified" (may trigger ambiguity). */
+  occurrence: number;
+  /** Whether this is the recursive descendant wildcard "**". */
+  isRecursive: boolean;
+};
+
+/**
+ * Parse a single path segment into its components.
+ *
+ * Supported syntax:
+ *   Name           → match by name, any type
+ *   Name[N]        → Nth occurrence (1-indexed), any type
+ *   Name:TYPE      → match by name AND type
+ *   Name:TYPE[N]   → Nth occurrence matching name AND type
+ *   *              → match any child
+ *   *:TYPE         → match any child of given type
+ *   **             → recursive descendant marker
+ *   #id            → direct node id
+ */
+function parsePathSegment(segment: string): ParsedSegment {
   const trimmed = segment.trim();
-  const match = /^(.*?)(?:\[(\d+)\])?$/.exec(trimmed);
-  if (!match) {
-    return { matcher: trimmed, occurrence: 1 };
+
+  // Recursive descendant wildcard
+  if (trimmed === "**") {
+    return { matcher: "**", occurrence: 0, isRecursive: true };
   }
+
+  // Regex: (name_or_hash_or_star) optionally (:TYPE, case-insensitive) optionally ([N])
+  const match = /^(.*?)(?::([A-Za-z_]+))?(?:\[(\d+)\])?$/.exec(trimmed);
+  if (!match) {
+    return { matcher: trimmed, occurrence: 0, isRecursive: false };
+  }
+
   return {
     matcher: match[1] ?? trimmed,
-    occurrence: match[2] ? Number.parseInt(match[2], 10) : 1
+    typeFilter: match[2] ? match[2].toUpperCase() : undefined,
+    occurrence: match[3] ? Number.parseInt(match[3], 10) : 0,
+    isRecursive: false,
   };
 }
 
-function resolveNodePath(index: SnapshotIndex, path: string): FigmaNode {
+/**
+ * Test whether a node matches a parsed segment.
+ */
+function nodeMatchesSegment(node: FigmaNode, segment: ParsedSegment): boolean {
+  // Direct id match
+  if (segment.matcher.startsWith("#")) {
+    if (node.id !== segment.matcher.slice(1)) {
+      return false;
+    }
+    // If a type filter is also specified, check it
+    if (segment.typeFilter && node.type.toUpperCase() !== segment.typeFilter) {
+      return false;
+    }
+    return true;
+  }
+
+  // Wildcard name match
+  if (segment.matcher === "*") {
+    if (segment.typeFilter && node.type.toUpperCase() !== segment.typeFilter) {
+      return false;
+    }
+    return true;
+  }
+
+  // Exact name match
+  if (node.name !== segment.matcher) {
+    return false;
+  }
+
+  // Optional type filter
+  if (segment.typeFilter && node.type.toUpperCase() !== segment.typeFilter) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Collect all descendants of a set of parent nodes (depth-first).
+ */
+function collectDescendants(index: SnapshotIndex, parents: Array<FigmaNode | undefined>): FigmaNode[] {
+  const result: FigmaNode[] = [];
+  const visited = new Set<string>();
+
+  function walk(parent: FigmaNode | undefined): void {
+    const children = getChildren(index, parent);
+    for (const child of children) {
+      if (visited.has(child.id)) continue;
+      visited.add(child.id);
+      result.push(child);
+      walk(child);
+    }
+  }
+
+  for (const parent of parents) {
+    walk(parent);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Path resolution (core)
+// ---------------------------------------------------------------------------
+
+type PathResolutionResult = {
+  node: FigmaNode;
+  /** Total matches for the final segment (before occurrence selection). */
+  matchCount: number;
+  /** IDs of all matched candidates for the final segment. */
+  matchedNodeIds: string[];
+  /** Whether the final segment had an explicit [N] index. */
+  explicitIndex: boolean;
+};
+
+/**
+ * Resolve a node path selector against the snapshot index.
+ *
+ * Path syntax:
+ *   "Hero/Button"       → name path
+ *   "Hero/Button[2]"    → 2nd Button child of Hero
+ *   "Hero/Button:FRAME" → Button child of type FRAME
+ *   "Hero/*:TEXT"        → any TEXT child of Hero
+ *   "Hero/ ** /Button"   → recursive descendant named Button under Hero
+ *   "#node-id"          → direct id (standalone)
+ *   "#node-id/Child"    → id-addressed parent, then name child
+ */
+function resolveNodePathInternal(index: SnapshotIndex, path: string): PathResolutionResult {
   const trimmed = path.trim();
   if (!trimmed) {
     throw new Error("nodePath cannot be empty");
   }
 
+  // Standalone #id or #id:TYPE (no slashes) — fast path
   if (trimmed.startsWith("#") && !trimmed.includes("/")) {
-    const node = index.nodeMap.get(trimmed.slice(1));
+    const parsed = parsePathSegment(trimmed);
+    const nodeId = parsed.matcher.slice(1); // remove "#"
+    const node = index.nodeMap.get(nodeId);
     if (!node) {
-      throw new Error(`No node found for id ${trimmed.slice(1)}`);
+      throw new Error(`No node found for id "${nodeId}"`);
     }
-    return node;
+    // Validate type filter if specified
+    if (parsed.typeFilter && node.type.toUpperCase() !== parsed.typeFilter) {
+      throw new Error(`Node "${nodeId}" exists but has type "${node.type}", not "${parsed.typeFilter}"`);
+    }
+    return { node, matchCount: 1, matchedNodeIds: [node.id], explicitIndex: false };
   }
 
-  const segments = trimmed.split("/").filter(Boolean);
+  const rawSegments = trimmed.split("/").filter(Boolean);
+  const segments = rawSegments.map(parsePathSegment);
+
   let currentParents: Array<FigmaNode | undefined> = [undefined];
+  let lastMatches: FigmaNode[] = [];
+  let lastExplicitIndex = false;
 
-  for (const segment of segments) {
-    const { matcher, occurrence } = parsePathSegment(segment);
-    const matches: FigmaNode[] = [];
+  let i = 0;
+  while (i < segments.length) {
+    const segment = segments[i]!;
 
+    // Handle ** recursive descendant
+    if (segment.isRecursive) {
+      if (i + 1 >= segments.length) {
+        throw new Error(`Path "**" must be followed by a concrete segment`);
+      }
+      // Collect all descendants of current parents
+      const descendants = collectDescendants(index, currentParents);
+      // The NEXT segment is the actual matcher to apply on descendants
+      i += 1;
+      const nextSegment = segments[i]!;
+      if (nextSegment.isRecursive) {
+        throw new Error(`Consecutive "**" segments are not allowed`);
+      }
+
+      const matches = descendants.filter((node) => nodeMatchesSegment(node, nextSegment));
+      lastMatches = matches;
+
+      if (matches.length === 0) {
+        throw new Error(`Recursive descendant selector "**/${rawSegments[i]}" did not match any node`);
+      }
+
+      const occurrence = nextSegment.occurrence;
+      if (occurrence > 0) {
+        if (occurrence > matches.length) {
+          throw new Error(`Recursive descendant selector "**/${rawSegments[i]}" requested occurrence ${occurrence}, but only ${matches.length} match(es) exist`);
+        }
+        currentParents = [matches[occurrence - 1]];
+        lastExplicitIndex = true;
+      } else {
+        // No explicit index — use first match (ambiguity is reported by caller)
+        currentParents = [matches[0]];
+        lastExplicitIndex = false;
+      }
+
+      i += 1;
+      continue;
+    }
+
+    // Normal segment resolution
+    const candidates: FigmaNode[] = [];
     for (const parent of currentParents) {
       for (const child of getChildren(index, parent)) {
-        if (matcher.startsWith("#")) {
-          if (child.id === matcher.slice(1)) {
-            matches.push(child);
-          }
-          continue;
-        }
-
-        if (child.name === matcher) {
-          matches.push(child);
+        if (nodeMatchesSegment(child, segment)) {
+          candidates.push(child);
         }
       }
     }
 
-    if (matches.length === 0) {
-      throw new Error(`Path segment "${segment}" did not match any node`);
+    lastMatches = candidates;
+
+    if (candidates.length === 0) {
+      const segmentDesc = rawSegments[i] ?? segment.matcher;
+      throw new Error(`Path segment "${segmentDesc}" did not match any node`);
     }
 
-    if (occurrence < 1 || occurrence > matches.length) {
-      throw new Error(`Path segment "${segment}" requested occurrence ${occurrence}, but only ${matches.length} match(es) exist`);
+    const occurrence = segment.occurrence;
+    if (occurrence > 0) {
+      if (occurrence > candidates.length) {
+        throw new Error(`Path segment "${rawSegments[i]}" requested occurrence ${occurrence}, but only ${candidates.length} match(es) exist`);
+      }
+      currentParents = [candidates[occurrence - 1]];
+      lastExplicitIndex = true;
+    } else {
+      // No explicit index — use first match
+      currentParents = [candidates[0]];
+      lastExplicitIndex = false;
     }
 
-    currentParents = [matches[occurrence - 1]];
+    i += 1;
   }
 
-  if (!currentParents[0]) {
-    throw new Error(`Failed to resolve path ${path}`);
+  const resolvedNode = currentParents[0];
+  if (!resolvedNode) {
+    throw new Error(`Failed to resolve path "${path}"`);
   }
 
-  return currentParents[0];
+  return {
+    node: resolvedNode,
+    matchCount: lastMatches.length,
+    matchedNodeIds: lastMatches.map((n) => n.id),
+    explicitIndex: lastExplicitIndex,
+  };
 }
+
+// ---------------------------------------------------------------------------
+// Public resolveNodePath (backwards-compatible signature)
+// ---------------------------------------------------------------------------
+
+function resolveNodePath(index: SnapshotIndex, path: string): FigmaNode {
+  return resolveNodePathInternal(index, path).node;
+}
+
+/**
+ * Resolve a node path and return full diagnostics including ambiguity info.
+ */
+function resolveNodePathWithDiagnostics(
+  index: SnapshotIndex,
+  path: string,
+): PathResolutionResult {
+  return resolveNodePathInternal(index, path);
+}
+
+// ---------------------------------------------------------------------------
+// Variable resolution
+// ---------------------------------------------------------------------------
 
 function resolveVariable(index: SnapshotIndex, variableId?: string, variableName?: string): FigmaVariable {
   if (variableId) {
     const variable = index.variableMap.get(variableId);
     if (!variable) {
-      throw new Error(`Variable ${variableId} was not found`);
+      throw new Error(`Variable "${variableId}" was not found`);
     }
     return variable;
   }
@@ -157,16 +379,20 @@ function resolveVariable(index: SnapshotIndex, variableId?: string, variableName
     throw new Error(`Variable "${variableName}" was not found`);
   }
   if (matches.length > 1) {
-    throw new Error(`Variable "${variableName}" is ambiguous; ${matches.length} matches found`);
+    throw new Error(`Variable "${variableName}" is ambiguous; ${matches.length} matches found: ${matches.map((v) => v.id).join(", ")}`);
   }
   return matches[0]!;
 }
+
+// ---------------------------------------------------------------------------
+// Node resolution (id or path)
+// ---------------------------------------------------------------------------
 
 function resolveNode(index: SnapshotIndex, nodeId?: string, nodePath?: string): FigmaNode {
   if (nodeId) {
     const node = index.nodeMap.get(nodeId);
     if (!node) {
-      throw new Error(`Node ${nodeId} was not found`);
+      throw new Error(`Node "${nodeId}" was not found in snapshot (${index.nodeMap.size} nodes available)`);
     }
     return node;
   }
@@ -175,6 +401,32 @@ function resolveNode(index: SnapshotIndex, nodeId?: string, nodePath?: string): 
   }
   return resolveNodePath(index, nodePath);
 }
+
+/**
+ * Resolve a node (id or path) with full diagnostics.
+ */
+function resolveNodeWithDiagnostics(
+  index: SnapshotIndex,
+  nodeId?: string,
+  nodePath?: string,
+): { node: FigmaNode; diagnostics: PathResolutionResult | null } {
+  if (nodeId) {
+    const node = index.nodeMap.get(nodeId);
+    if (!node) {
+      throw new Error(`Node "${nodeId}" was not found in snapshot (${index.nodeMap.size} nodes available)`);
+    }
+    return { node, diagnostics: null };
+  }
+  if (!nodePath) {
+    throw new Error("nodeId or nodePath is required");
+  }
+  const diagnostics = resolveNodePathWithDiagnostics(index, nodePath);
+  return { node: diagnostics.node, diagnostics };
+}
+
+// ---------------------------------------------------------------------------
+// Resolution summary helpers
+// ---------------------------------------------------------------------------
 
 function addSummary(
   resolutions: ResolutionSummary[],
@@ -188,6 +440,29 @@ function addSummary(
     ...summary
   });
 }
+
+/**
+ * If a path resolution is ambiguous (matchCount > 1 with no explicit [N]),
+ * add a structured warning.
+ */
+function checkAmbiguity(
+  warnings: ResolutionIssue[],
+  operationIndex: number,
+  selectorUsed: string,
+  diagnostics: PathResolutionResult | null,
+): void {
+  if (!diagnostics) return;
+  if (diagnostics.matchCount > 1 && !diagnostics.explicitIndex) {
+    warnings.push({
+      index: operationIndex,
+      message: `Selector "${selectorUsed}" matched ${diagnostics.matchCount} nodes: [${diagnostics.matchedNodeIds.join(", ")}]. Using first match "${diagnostics.node.id}". Use an explicit index like [1] or [2] to disambiguate.`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Batch resolution (main export)
+// ---------------------------------------------------------------------------
 
 export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operations: FigmaBatchOperationInput[]): ResolvedBatchResult {
   const result: ResolvedBatchResult = {
@@ -230,8 +505,12 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
           }
 
           let parentId = operation.parentId;
+          let parentDiagnostics: PathResolutionResult | null = null;
           if (!parentId && operation.parentPath) {
-            parentId = resolveNodePath(index, operation.parentPath).id;
+            const res = resolveNodePathWithDiagnostics(index, operation.parentPath);
+            parentId = res.node.id;
+            parentDiagnostics = res;
+            checkAmbiguity(result.warnings, operationIndex, operation.parentPath, parentDiagnostics);
           }
 
           result.resolvedOperations.push({
@@ -242,14 +521,21 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
             position: operation.position
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
-            resolvedParentId: parentId
+            resolvedParentId: parentId,
+            selectorUsed: operation.parentPath ?? operation.parentId,
+            matchCount: parentDiagnostics?.matchCount,
+            matchedNodeIds: parentDiagnostics?.matchedNodeIds,
           });
           return;
         }
         case "create_instance": {
           let parentId = operation.parentId;
+          let parentDiagnostics: PathResolutionResult | null = null;
           if (!parentId && operation.parentPath) {
-            parentId = resolveNodePath(index, operation.parentPath).id;
+            const res = resolveNodePathWithDiagnostics(index, operation.parentPath);
+            parentId = res.node.id;
+            parentDiagnostics = res;
+            checkAmbiguity(result.warnings, operationIndex, operation.parentPath, parentDiagnostics);
           }
 
           result.resolvedOperations.push({
@@ -258,16 +544,25 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
             componentKey: operation.componentKey,
             parentId,
             index: operation.index,
-            position: operation.position
+            position: operation.position,
+            variantProperties: operation.variantProperties,
+            componentProperties: operation.componentProperties,
+            textOverrides: operation.textOverrides
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
             resolvedParentId: parentId,
-            resolvedNodeId: operation.componentId
+            resolvedNodeId: operation.componentId,
+            selectorUsed: operation.parentPath ?? operation.parentId,
+            matchCount: parentDiagnostics?.matchCount,
+            matchedNodeIds: parentDiagnostics?.matchedNodeIds,
           });
           return;
         }
         case "update_node": {
-          const node = resolveNode(index, operation.nodeId, operation.nodePath);
+          const selectorUsed = operation.nodePath ?? operation.nodeId;
+          const { node, diagnostics } = resolveNodeWithDiagnostics(index, operation.nodeId, operation.nodePath);
+          checkAmbiguity(result.warnings, operationIndex, selectorUsed ?? "", diagnostics);
+
           const ignoredFields = Object.keys(operation.patch).filter((field) => !SUPPORTED_SHARED_PATCH_FIELDS.has(field));
           if (ignoredFields.length > 0) {
             result.warnings.push({
@@ -281,27 +576,44 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
             patch: operation.patch
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
-            resolvedNodeId: node.id
+            resolvedNodeId: node.id,
+            selectorUsed,
+            matchCount: diagnostics?.matchCount,
+            matchedNodeIds: diagnostics?.matchedNodeIds,
           });
           return;
         }
         case "delete_node": {
-          const node = resolveNode(index, operation.nodeId, operation.nodePath);
+          const selectorUsed = operation.nodePath ?? operation.nodeId;
+          const { node, diagnostics } = resolveNodeWithDiagnostics(index, operation.nodeId, operation.nodePath);
+          checkAmbiguity(result.warnings, operationIndex, selectorUsed ?? "", diagnostics);
+
           result.resolvedOperations.push({
             type: "delete_node",
             nodeId: node.id
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
-            resolvedNodeId: node.id
+            resolvedNodeId: node.id,
+            selectorUsed,
+            matchCount: diagnostics?.matchCount,
+            matchedNodeIds: diagnostics?.matchedNodeIds,
           });
           return;
         }
         case "move_node": {
-          const node = resolveNode(index, operation.nodeId, operation.nodePath);
+          const selectorUsed = operation.nodePath ?? operation.nodeId;
+          const { node, diagnostics } = resolveNodeWithDiagnostics(index, operation.nodeId, operation.nodePath);
+          checkAmbiguity(result.warnings, operationIndex, selectorUsed ?? "", diagnostics);
+
           let parentId = operation.parentId;
+          let parentDiagnostics: PathResolutionResult | null = null;
           if (!parentId && operation.parentPath) {
-            parentId = resolveNodePath(index, operation.parentPath).id;
+            const res = resolveNodePathWithDiagnostics(index, operation.parentPath);
+            parentId = res.node.id;
+            parentDiagnostics = res;
+            checkAmbiguity(result.warnings, operationIndex, operation.parentPath, parentDiagnostics);
           }
+
           result.resolvedOperations.push({
             type: "move_node",
             nodeId: node.id,
@@ -311,7 +623,10 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
             resolvedNodeId: node.id,
-            resolvedParentId: parentId
+            resolvedParentId: parentId,
+            selectorUsed,
+            matchCount: diagnostics?.matchCount,
+            matchedNodeIds: diagnostics?.matchedNodeIds,
           });
           return;
         }
@@ -323,15 +638,18 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
             value: operation.value
           });
           addSummary(result.resolutions, operationIndex, operation.type, {
-            resolvedVariableId: variable.id
+            resolvedVariableId: variable.id,
+            selectorUsed: operation.variableName ?? operation.variableId,
           });
           return;
         }
         case "set_selection": {
-          const resolvedIds = [
-            ...(operation.selectionIds ?? []),
-            ...((operation.selectionPaths ?? []).map((path) => resolveNodePath(index, path).id))
-          ];
+          const resolvedIds: string[] = [...(operation.selectionIds ?? [])];
+          for (const selPath of operation.selectionPaths ?? []) {
+            const res = resolveNodePathWithDiagnostics(index, selPath);
+            resolvedIds.push(res.node.id);
+            checkAmbiguity(result.warnings, operationIndex, selPath, res);
+          }
           result.resolvedOperations.push({
             type: "set_selection",
             selectionIds: resolvedIds
@@ -345,7 +663,9 @@ export function resolveBatchOperations(snapshot: FigmaSnapshot | null, operation
         case "run_plugin_action": {
           const payload = { ...operation.payload };
           if (operation.action === "scroll_into_view" && typeof payload.nodePath === "string" && !payload.nodeId) {
-            payload.nodeId = resolveNodePath(index, payload.nodePath).id;
+            const res = resolveNodePathWithDiagnostics(index, payload.nodePath as string);
+            payload.nodeId = res.node.id;
+            checkAmbiguity(result.warnings, operationIndex, payload.nodePath as string, res);
             delete payload.nodePath;
           }
           result.resolvedOperations.push({

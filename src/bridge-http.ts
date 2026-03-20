@@ -6,11 +6,11 @@ import { insertFigmaAssetWithOptionalSync } from "./figma-assets-insert-orchestr
 import { scanVisibleAssetsPanel } from "./figma-assets-panel.js";
 import { insertFigmaAssetFromPanel, searchFigmaAssetsPanel } from "./figma-assets-workflow.js";
 import { FigmaPluginMenuClient } from "./figma-plugin-menu.js";
-import { materializeFigmaAsset } from "./materialize-figma-asset.js";
+import { materializeFigmaAssetTraced } from "./materialize-figma-asset.js";
 import { searchPublishedComponentsInFile } from "./figma-rest.js";
 import { enqueueBatchOperationsSchema, talkToFigmaCommandSchema, talkToFigmaProbeSchema } from "./schemas.js";
 import { discoverResponsiveTalkToFigmaChannel, listObservedTalkToFigmaChannels } from "./talk-to-figma-log.js";
-import { executeTalkToFigmaSessionQueue } from "./talk-to-figma-queue.js";
+import { executeTalkToFigmaSessionQueueTraced } from "./talk-to-figma-queue.js";
 import { ensureTalkToFigmaSession } from "./talk-to-figma-session.js";
 import { TalkToFigmaClient } from "./talk-to-figma.js";
 import { syncTalkToFigmaChannel } from "./talk-to-figma-sync.js";
@@ -299,6 +299,46 @@ export class BridgeHttpServer {
       };
     }
 
+    // ── Trace retrieval routes (GET) ─────────────────────────────────
+    if (req.method === "GET" && url.pathname === "/bridge/traces") {
+      const traceStore = await this.store.getTraceStore();
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam ? parseInt(limitParam, 10) : 20;
+      const flowType = url.searchParams.get("flowType") ?? undefined;
+
+      const traces = flowType
+        ? traceStore.getTracesByFlow(flowType as "ensure-session" | "queue-execution" | "materialize-asset", limit)
+        : traceStore.getRecentTraces(limit);
+
+      return { statusCode: 200, body: { traces, count: traces.length } };
+    }
+
+    {
+      const treeMatch = url.pathname.match(/^\/bridge\/traces\/([^/]+)\/tree$/);
+      if (req.method === "GET" && treeMatch) {
+        const traceStore = await this.store.getTraceStore();
+        const traceId = treeMatch[1]!;
+        const tree = traceStore.getTraceTree(traceId);
+        if (tree.length === 0) {
+          return { statusCode: 404, body: { error: `Trace ${traceId} not found` } };
+        }
+        return { statusCode: 200, body: { traceId, tree, count: tree.length } };
+      }
+    }
+
+    {
+      const traceMatch = url.pathname.match(/^\/bridge\/traces\/([^/]+)$/);
+      if (req.method === "GET" && traceMatch) {
+        const traceStore = await this.store.getTraceStore();
+        const traceId = traceMatch[1]!;
+        const trace = traceStore.getTrace(traceId);
+        if (!trace) {
+          return { statusCode: 404, body: { error: `Trace ${traceId} not found` } };
+        }
+        return { statusCode: 200, body: trace };
+      }
+    }
+
     if (req.method !== "POST") {
       return {
         statusCode: 404,
@@ -430,31 +470,37 @@ export class BridgeHttpServer {
             }
           };
         }
-        const result = await materializeFigmaAsset({
-          store: this.store,
-          query: payload.query,
-          sessionId: payload.sessionId,
-          channel: payload.channel,
-          wsUrl: payload.wsUrl,
-          logPath: payload.logPath,
-          timeoutMs: payload.timeoutMs,
-          limit: payload.limit,
-          pluginName: payload.pluginName,
-          appName: payload.appName,
-          attempts: payload.attempts,
-          delayMs: payload.delayMs,
-          forceLaunch: payload.forceLaunch,
-          activateApp: payload.activateApp,
-          windowTitle: payload.windowTitle,
-          resultIndex: payload.resultIndex,
-          settleMs: payload.settleMs,
-          holdMs: payload.holdMs,
-          releaseMs: payload.releaseMs,
-          dryRun: payload.dryRun,
-          postInsertDelayMs: payload.postInsertDelayMs,
-          selectInsertedNodes: payload.selectInsertedNodes
-        });
-        return { statusCode: 200, body: result };
+        const traceStore = await this.store.getTraceStore();
+        try {
+          const result = await materializeFigmaAssetTraced({
+            store: this.store,
+            query: payload.query,
+            sessionId: payload.sessionId,
+            channel: payload.channel,
+            wsUrl: payload.wsUrl,
+            logPath: payload.logPath,
+            timeoutMs: payload.timeoutMs,
+            limit: payload.limit,
+            pluginName: payload.pluginName,
+            appName: payload.appName,
+            attempts: payload.attempts,
+            delayMs: payload.delayMs,
+            forceLaunch: payload.forceLaunch,
+            activateApp: payload.activateApp,
+            windowTitle: payload.windowTitle,
+            resultIndex: payload.resultIndex,
+            settleMs: payload.settleMs,
+            holdMs: payload.holdMs,
+            releaseMs: payload.releaseMs,
+            dryRun: payload.dryRun,
+            postInsertDelayMs: payload.postInsertDelayMs,
+            selectInsertedNodes: payload.selectInsertedNodes,
+            traceStore
+          });
+          return { statusCode: 200, body: result };
+        } finally {
+          await this.store.persistTraces();
+        }
       }
       case "/bridge/instantiate-component": {
         const payload = body as {
@@ -618,22 +664,30 @@ export class BridgeHttpServer {
           attempts?: number;
           delayMs?: number;
           forceLaunch?: boolean;
+          staleThresholdMs?: number;
         };
-        const result = await ensureTalkToFigmaSession({
-          store: this.store,
-          sessionId: payload.sessionId,
-          channel: payload.channel,
-          wsUrl: payload.wsUrl,
-          logPath: payload.logPath,
-          timeoutMs: payload.timeoutMs,
-          limit: payload.limit,
-          pluginName: payload.pluginName,
-          appName: payload.appName,
-          attempts: payload.attempts,
-          delayMs: payload.delayMs,
-          forceLaunch: payload.forceLaunch
-        });
-        return { statusCode: 200, body: result };
+        const traceStore = await this.store.getTraceStore();
+        try {
+          const result = await ensureTalkToFigmaSession({
+            store: this.store,
+            sessionId: payload.sessionId,
+            channel: payload.channel,
+            wsUrl: payload.wsUrl,
+            logPath: payload.logPath,
+            timeoutMs: payload.timeoutMs,
+            limit: payload.limit,
+            pluginName: payload.pluginName,
+            appName: payload.appName,
+            attempts: payload.attempts,
+            delayMs: payload.delayMs,
+            forceLaunch: payload.forceLaunch,
+            staleThresholdMs: payload.staleThresholdMs,
+            traceStore
+          });
+          return { statusCode: 200, body: result };
+        } finally {
+          await this.store.persistTraces();
+        }
       }
       case "/bridge/talk-to-figma/run-queue": {
         const payload = body as {
@@ -651,15 +705,21 @@ export class BridgeHttpServer {
             }
           };
         }
-        const result = await executeTalkToFigmaSessionQueue({
-          store: this.store,
-          sessionId: payload.sessionId,
-          limit: payload.limit,
-          wsUrl: payload.wsUrl,
-          timeoutMs: payload.timeoutMs,
-          syncAfter: payload.syncAfter
-        });
-        return { statusCode: 200, body: result };
+        const traceStore = await this.store.getTraceStore();
+        try {
+          const result = await executeTalkToFigmaSessionQueueTraced({
+            store: this.store,
+            sessionId: payload.sessionId,
+            limit: payload.limit,
+            wsUrl: payload.wsUrl,
+            timeoutMs: payload.timeoutMs,
+            syncAfter: payload.syncAfter,
+            traceStore
+          });
+          return { statusCode: 200, body: result };
+        } finally {
+          await this.store.persistTraces();
+        }
       }
       case "/bridge/figma/launch-development-plugin": {
         const payload = body as {

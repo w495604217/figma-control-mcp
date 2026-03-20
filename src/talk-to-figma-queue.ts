@@ -1,8 +1,11 @@
 import { BridgeStore } from "./bridge-store.js";
-import { executeQueuedOperations } from "./queue-executor.js";
+import { executeQueuedOperations, type BatchOutcome } from "./queue-executor.js";
 import { TalkToFigmaAdapter } from "./talk-to-figma-adapter.js";
+import { assessSessionHealth, type SessionHealth } from "./talk-to-figma-session.js";
 import { syncTalkToFigmaChannel } from "./talk-to-figma-sync.js";
 import { TalkToFigmaClient } from "./talk-to-figma.js";
+import { createTraceContext, recordTrace } from "./trace-store.js";
+import type { TraceStore } from "./trace-store.js";
 
 type TalkToFigmaExecutor = Pick<TalkToFigmaClient, "executeCommand">;
 
@@ -14,6 +17,10 @@ type ExecuteTalkToFigmaQueueInput = {
   timeoutMs?: number;
   syncAfter?: boolean;
   client?: TalkToFigmaExecutor;
+  /** Trace store for observability. When provided, a trace record is emitted. */
+  traceStore?: TraceStore;
+  /** Parent trace id for linking sub-operations. */
+  parentTraceId?: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -62,18 +69,20 @@ async function runUndoCommand(client: TalkToFigmaExecutor, options: {
 export async function executeTalkToFigmaSessionQueue(input: ExecuteTalkToFigmaQueueInput): Promise<{
   sessionId: string;
   channel: string;
+  sessionHealth: SessionHealth;
   pulledCount: number;
   processedCount: number;
   updates: Array<{
     operationId: string;
-    status: "dispatched" | "succeeded" | "failed";
+    status: "dispatched" | "succeeded" | "failed" | "skipped";
     error?: string;
     result?: JsonRecord;
     touchedNodeIds: string[];
   }>;
+  batches: BatchOutcome[];
   acknowledged: Array<{
     operationId: string;
-    status: "queued" | "dispatched" | "succeeded" | "failed";
+    status: "queued" | "dispatched" | "succeeded" | "failed" | "skipped";
     error?: string;
     result?: JsonRecord;
     touchedNodeIds: string[];
@@ -101,14 +110,20 @@ export async function executeTalkToFigmaSessionQueue(input: ExecuteTalkToFigmaQu
   const limit = input.limit ?? 20;
   const client = input.client ?? new TalkToFigmaClient({ wsUrl });
 
+  // Pre-execution health snapshot (used as fallback if no post-sync re-assessment)
+  const healthAssessment = assessSessionHealth(session, 5 * 60 * 1000);
+  const preExecHealth: SessionHealth = healthAssessment.health;
+
   const records = await input.store.pullQueuedOperations(input.sessionId, limit);
   if (records.length === 0) {
     return {
       sessionId: input.sessionId,
       channel,
+      sessionHealth: preExecHealth,
       pulledCount: 0,
       processedCount: 0,
       updates: [],
+      batches: [],
       acknowledged: [],
       snapshotSynced: false
     };
@@ -158,13 +173,89 @@ export async function executeTalkToFigmaSessionQueue(input: ExecuteTalkToFigmaQu
     snapshotSynced = true;
   }
 
+  // Post-execution health: re-read session to pick up any heartbeat/sync
+  // updates made during execution, so callers see "active" after a
+  // successful run instead of a possibly stale pre-execution assessment.
+  let sessionHealth: SessionHealth;
+  if (snapshotSynced) {
+    const freshSession = await input.store.getSession(input.sessionId);
+    const freshMeta = asRecord(freshSession?.metadata) ?? {};
+    sessionHealth = assessSessionHealth(freshMeta, 5 * 60 * 1000).health;
+  } else {
+    sessionHealth = preExecHealth;
+  }
+
   return {
     sessionId: input.sessionId,
     channel,
+    sessionHealth,
     pulledCount: records.length,
     processedCount: execution.processedCount,
     updates: execution.updates,
+    batches: execution.batches,
     acknowledged,
     snapshotSynced
   };
+}
+
+/**
+ * Wrapper that instruments queue execution with tracing.
+ */
+export async function executeTalkToFigmaSessionQueueTraced(input: ExecuteTalkToFigmaQueueInput): Promise<ReturnType<typeof executeTalkToFigmaSessionQueue> extends Promise<infer R> ? R : never> {
+  const traceCtx = createTraceContext(input.traceStore, input.parentTraceId);
+  const traceStartedAt = new Date().toISOString();
+
+  try {
+    const result = await executeTalkToFigmaSessionQueue(input);
+
+    if (traceCtx) {
+      const failedBatches = result.batches.filter((b) => b.status !== "succeeded");
+      const warnings = failedBatches
+        .filter((b) => b.status === "partially_failed")
+        .map((b) => `Batch ${b.batchId} partially failed at operation ${b.failedOperationId ?? "unknown"}`);
+      const errors = failedBatches
+        .filter((b) => b.status === "fully_failed")
+        .map((b) => `Batch ${b.batchId} fully failed: ${b.failureMessage ?? "unknown"}`);
+
+      recordTrace(traceCtx, {
+        flowType: "queue-execution",
+        startedAt: traceStartedAt,
+        status: errors.length > 0 ? "failed" : "succeeded",
+        sessionId: result.sessionId,
+        channel: result.channel,
+        input: {
+          sessionId: input.sessionId,
+          limit: input.limit,
+          syncAfter: input.syncAfter,
+        },
+        output: {
+          pulledCount: result.pulledCount,
+          processedCount: result.processedCount,
+          batchCount: result.batches.length,
+          sessionHealth: result.sessionHealth,
+          snapshotSynced: result.snapshotSynced,
+        },
+        warnings,
+        errors,
+      });
+    }
+
+    return result;
+  } catch (error) {
+    if (traceCtx) {
+      recordTrace(traceCtx, {
+        flowType: "queue-execution",
+        startedAt: traceStartedAt,
+        status: "failed",
+        sessionId: input.sessionId,
+        input: {
+          sessionId: input.sessionId,
+          limit: input.limit,
+        },
+        output: {},
+        errors: [String(error)],
+      });
+    }
+    throw error;
+  }
 }

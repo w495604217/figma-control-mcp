@@ -8,7 +8,7 @@ import { insertFigmaAssetWithOptionalSync } from "./figma-assets-insert-orchestr
 import { scanVisibleAssetsPanel } from "./figma-assets-panel.js";
 import { insertFigmaAssetFromPanel, searchFigmaAssetsPanel } from "./figma-assets-workflow.js";
 import { FigmaPluginMenuClient } from "./figma-plugin-menu.js";
-import { materializeFigmaAsset } from "./materialize-figma-asset.js";
+import { materializeFigmaAssetTraced } from "./materialize-figma-asset.js";
 import { searchPublishedComponentsInFile } from "./figma-rest.js";
 import {
   acknowledgeOperationsSchema,
@@ -21,7 +21,7 @@ import {
   talkToFigmaProbeSchema
 } from "./schemas.js";
 import { discoverResponsiveTalkToFigmaChannel, listObservedTalkToFigmaChannels } from "./talk-to-figma-log.js";
-import { executeTalkToFigmaSessionQueue } from "./talk-to-figma-queue.js";
+import { executeTalkToFigmaSessionQueueTraced } from "./talk-to-figma-queue.js";
 import { ensureTalkToFigmaSession } from "./talk-to-figma-session.js";
 import { syncTalkToFigmaChannel } from "./talk-to-figma-sync.js";
 import { TalkToFigmaClient } from "./talk-to-figma.js";
@@ -508,18 +508,24 @@ export function createServer(store: BridgeStore): McpServer {
     },
     async ({ sessionId, limit, wsUrl, timeoutMs, syncAfter }) => {
       try {
-        const result = await executeTalkToFigmaSessionQueue({
-          store,
-          sessionId,
-          limit,
-          wsUrl,
-          timeoutMs,
-          syncAfter
-        });
-        return {
-          content: [{ type: "text", text: jsonText(result) }],
-          structuredContent: result
-        };
+        const traceStore = await store.getTraceStore();
+        try {
+          const result = await executeTalkToFigmaSessionQueueTraced({
+            store,
+            sessionId,
+            limit,
+            wsUrl,
+            timeoutMs,
+            syncAfter,
+            traceStore
+          });
+          return {
+            content: [{ type: "text", text: jsonText(result) }],
+            structuredContent: result
+          };
+        } finally {
+          await store.persistTraces();
+        }
       } catch (error) {
         return {
           isError: true,
@@ -545,29 +551,37 @@ export function createServer(store: BridgeStore): McpServer {
         appName: z.string().default("Figma"),
         attempts: z.number().int().positive().max(20).default(5),
         delayMs: z.number().int().positive().max(10000).default(700),
-        forceLaunch: z.boolean().default(false)
+        forceLaunch: z.boolean().default(false),
+        staleThresholdMs: z.number().int().positive().max(3600000).default(300000).describe("Milliseconds before a session heartbeat is considered stale (default 5 min)")
       }
     },
-    async ({ sessionId, channel, wsUrl, logPath, timeoutMs, limit, pluginName, appName, attempts, delayMs, forceLaunch }) => {
+    async ({ sessionId, channel, wsUrl, logPath, timeoutMs, limit, pluginName, appName, attempts, delayMs, forceLaunch, staleThresholdMs }) => {
       try {
-        const result = await ensureTalkToFigmaSession({
-          store,
-          sessionId,
-          channel,
-          wsUrl,
-          logPath,
-          timeoutMs,
-          limit,
-          pluginName,
-          appName,
-          attempts,
-          delayMs,
-          forceLaunch
-        });
-        return {
-          content: [{ type: "text", text: jsonText(result) }],
-          structuredContent: result
-        };
+        const traceStore = await store.getTraceStore();
+        try {
+          const result = await ensureTalkToFigmaSession({
+            store,
+            sessionId,
+            channel,
+            wsUrl,
+            logPath,
+            timeoutMs,
+            limit,
+            pluginName,
+            appName,
+            attempts,
+            delayMs,
+            forceLaunch,
+            staleThresholdMs,
+            traceStore
+          });
+          return {
+            content: [{ type: "text", text: jsonText(result) }],
+            structuredContent: result
+          };
+        } finally {
+          await store.persistTraces();
+        }
       } catch (error) {
         return {
           isError: true,
@@ -784,34 +798,40 @@ export function createServer(store: BridgeStore): McpServer {
     },
     async ({ query, sessionId, channel, wsUrl, logPath, timeoutMs, limit, pluginName, appName, attempts, delayMs, forceLaunch, activateApp, windowTitle, resultIndex, settleMs, holdMs, releaseMs, dryRun, postInsertDelayMs, selectInsertedNodes }) => {
       try {
-        const result = await materializeFigmaAsset({
-          store,
-          query,
-          sessionId,
-          channel,
-          wsUrl,
-          logPath,
-          timeoutMs,
-          limit,
-          pluginName,
-          appName,
-          attempts,
-          delayMs,
-          forceLaunch,
-          activateApp,
-          windowTitle,
-          resultIndex,
-          settleMs,
-          holdMs,
-          releaseMs,
-          dryRun,
-          postInsertDelayMs,
-          selectInsertedNodes
-        });
-        return {
-          content: [{ type: "text", text: jsonText(result) }],
-          structuredContent: result
-        };
+        const traceStore = await store.getTraceStore();
+        try {
+          const result = await materializeFigmaAssetTraced({
+            store,
+            query,
+            sessionId,
+            channel,
+            wsUrl,
+            logPath,
+            timeoutMs,
+            limit,
+            pluginName,
+            appName,
+            attempts,
+            delayMs,
+            forceLaunch,
+            activateApp,
+            windowTitle,
+            resultIndex,
+            settleMs,
+            holdMs,
+            releaseMs,
+            dryRun,
+            postInsertDelayMs,
+            selectInsertedNodes,
+            traceStore
+          });
+          return {
+            content: [{ type: "text", text: jsonText(result) }],
+            structuredContent: result
+          };
+        } finally {
+          await store.persistTraces();
+        }
       } catch (error) {
         return {
           isError: true,

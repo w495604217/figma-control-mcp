@@ -1,7 +1,7 @@
 const SESSION_PLUGIN_DATA_KEY = "figma-control-mcp-session-id";
 const BRIDGE_BASE_URL = "http://127.0.0.1:3847";
-const PLUGIN_VERSION = "0.0.1-beta";
-const BRIDGE_VERSION = "0.0.1-beta";
+const PLUGIN_VERSION = "0.1.0-beta";
+const BRIDGE_VERSION = "0.1.0-beta";
 const POLL_INTERVAL_MS = 1500;
 const UI_HTML = `<!doctype html>
 <html lang="en">
@@ -487,15 +487,77 @@ async function executeOperation(record: FigmaOperationRecord): Promise<JsonRecor
       }
       const instance = component.createInstance();
       await insertIntoParent(instance, operation.parentId as string | undefined, operation.index as number | undefined);
+
+      const applied: string[] = [];
+      const warnings: Array<{ property: string; reason: string }> = [];
+
+      // Variant and component properties via setProperties()
+      const propsToSet: Record<string, string | boolean> = {};
+      const variantProps = operation.variantProperties as Record<string, string> | undefined;
+      const componentProps = operation.componentProperties as Record<string, string | boolean> | undefined;
+
+      if (variantProps) {
+        for (const [key, value] of Object.entries(variantProps)) {
+          propsToSet[key] = value;
+        }
+      }
+      if (componentProps) {
+        for (const [key, value] of Object.entries(componentProps)) {
+          propsToSet[key] = value;
+        }
+      }
+
+      for (const [propName, propValue] of Object.entries(propsToSet)) {
+        try {
+          instance.setProperties({ [propName]: propValue });
+          applied.push(propName);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          warnings.push({ property: propName, reason: message });
+        }
+      }
+
+      // Text overrides via child name walk
+      const textOverrides = operation.textOverrides as Record<string, string> | undefined;
+      if (textOverrides) {
+        for (const [childName, newText] of Object.entries(textOverrides)) {
+          try {
+            const found = instance.findOne((n: SceneNode) => n.type === "TEXT" && n.name === childName) as TextNode | null;
+            if (!found) {
+              warnings.push({
+                property: `textOverride:${childName}`,
+                reason: `Text node with name '${childName}' was not found in instance`
+              });
+            } else {
+              if (found.fontName === figma.mixed) {
+                throw new Error("Cannot override text with mixed fonts");
+              }
+              await figma.loadFontAsync(found.fontName);
+              found.characters = newText;
+              applied.push(`textOverride:${childName}`);
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            warnings.push({ property: `textOverride:${childName}`, reason: message });
+          }
+        }
+      }
+
+      const instanceResult: JsonRecord = {
+        createdNodeId: instance.id,
+        sourceComponentId: component.id,
+        sourceComponentKey: component.key || operation.componentKey
+      };
+
+      if (applied.length > 0 || warnings.length > 0) {
+        instanceResult.overrideResults = { applied, warnings };
+      }
+
       return {
         operationId: record.operationId,
         status: "succeeded",
         touchedNodeIds: [instance.id],
-        result: {
-          createdNodeId: instance.id,
-          sourceComponentId: component.id,
-          sourceComponentKey: component.key || operation.componentKey
-        }
+        result: instanceResult
       };
     }
     case "update_node": {

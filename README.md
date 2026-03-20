@@ -14,13 +14,14 @@ The result is a system that can read, plan, execute, verify, and recover changes
 
 ## Project Status
 
-This repository is currently published as `0.0.1-beta`.
+This repository is currently published as `0.1.0-beta`.
 
 That means:
 
 - the core architecture is real and working
 - silent canvas control is already usable
-- live asset discovery and import are partially solved through a hybrid strategy
+- deterministic library indexing, selector/query resolution, and transactional queue semantics are implemented
+- session resilience, instance overrides, and trace/replay foundations are now in place
 - the library layer is still constrained by current Figma platform limits
 
 This is not yet a full Pencil-equivalent implementation, but it is already a practical beta for real design automation workflows.
@@ -99,7 +100,7 @@ Figma Plugin Worker   talk-to-figma Relay
    only where Figma APIs stop
 ```
 
-## Implemented in `0.0.1-beta`
+## Implemented in `0.1.0-beta`
 
 ### Core bridge and session model
 
@@ -118,6 +119,40 @@ Figma Plugin Worker   talk-to-figma Relay
 - automatic re-sync after queue execution
 - batch-aware queue pulling
 - partial rollback strategy through Figma undo semantics
+
+### Deterministic control improvements
+
+- deterministic library index with strategy ranking
+- stronger selector and query layer with ambiguity diagnostics
+- clearer transactional queue outcomes with rollback reporting
+- self-healing session reuse, discovery, and launch flow
+- instance override and variant support for a documented subset
+- structured traces, trace-tree retrieval, and replay-oriented audit metadata
+- structured transaction outcome per batch (`succeeded` / `partially_failed` / `fully_failed`)
+- explicit rollback reporting (`rollbackAttempted`, `rollbackSucceeded`, `rollbackError`)
+- three-state per-operation status: `succeeded`, `failed`, or `skipped` (never executed)
+
+### Path selector syntax
+
+Node operations accept `nodePath` and `parentPath` fields that resolve against the current snapshot. The resolver supports the following selector patterns:
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `Name` | Match child by exact name | `Hero/Button` |
+| `Name[N]` | Nth occurrence (1-indexed) | `Hero/Button[2]` |
+| `#id` | Direct node id | `#hero` |
+| `#id:TYPE` | Direct id with type validation | `#hero:FRAME` |
+| `Name:TYPE` | Match by name and Figma node type | `Button:COMPONENT` |
+| `Name:TYPE[N]` | Nth typed match | `Button:FRAME[1]` |
+| `*` | Match any child | `Hero/*` |
+| `*:TYPE` | Any child of given type | `Hero/*:TEXT` |
+| `**` | Recursive descendant | `Hero/**/Label` |
+
+Type filters are **case-insensitive** — `Button:frame`, `Button:Frame`, and `Button:FRAME` are all equivalent.
+
+**Ambiguity handling**: when multiple nodes match a selector without an explicit `[N]` index, the resolver picks the first match and emits a structured warning with the count and IDs of all candidates. Use an explicit index or a type filter to disambiguate.
+
+Selectors apply consistently to `nodePath`, `parentPath`, `selectionPaths`, and any plugin-action payload that includes a `nodePath` field.
 
 ### Node operations
 
@@ -138,6 +173,29 @@ Current `create_node` coverage:
 - `ELLIPSE`
 - `COMPONENT`
 - `SECTION`
+
+### Instance overrides
+
+`create_instance` accepts optional override fields:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `variantProperties` | `Record<string, string>` | Select variant values (e.g. `{ "Size": "Large" }`) |
+| `componentProperties` | `Record<string, string \| boolean>` | Set component properties (e.g. `{ "Show Icon": true }`) |
+| `textOverrides` | `Record<string, string>` | Override text nodes by child name (e.g. `{ "Label": "Submit" }`) |
+
+Override behavior:
+
+- Variant and component properties are applied via `instance.setProperties()` per property.
+- Text overrides walk the instance children by name, load fonts, and set `characters`.
+- If an override cannot be applied (wrong property name, text node not found, type mismatch), the instance is still created.
+- The result includes structured `overrideResults` with `applied` (succeeded names) and `warnings` (per-property failure reasons).
+
+Unsupported override types:
+
+- Nested instance swaps (swapping child instances to different components)
+- Style overrides on instance sub-nodes (fills, strokes, effects)
+- Path-based text targeting (only name-based first match)
 
 ### Hybrid runtime support
 
@@ -286,6 +344,12 @@ The plugin worker can:
 - `POST /bridge/figma/launch-development-plugin`
 - `POST /bridge/figma/launch-and-discover-talk-to-figma`
 
+### Tracing and observability
+
+- `GET /bridge/traces` — recent traces (query: `?limit=N`, `?flowType=ensure-session|queue-execution|materialize-asset`)
+- `GET /bridge/traces/:traceId` — single trace by ID
+- `GET /bridge/traces/:traceId/tree` — trace + all descendant traces (parent→child linkage)
+
 ## Path Syntax
 
 The resolver currently supports path-based addressing in addition to raw `nodeId`.
@@ -411,6 +475,7 @@ See [ROADMAP.md](ROADMAP.md).
 - [docs/TECH_SPEC.md](docs/TECH_SPEC.md)
 - [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 - [docs/RELEASE_GATES.md](docs/RELEASE_GATES.md)
+- [docs/VALIDATION_PLAYBOOK.md](docs/VALIDATION_PLAYBOOK.md)
 - [docs/OPUS_HANDOFF.md](docs/OPUS_HANDOFF.md)
 - [docs/OPUS_START_PROMPT.md](docs/OPUS_START_PROMPT.md)
 

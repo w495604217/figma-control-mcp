@@ -37,6 +37,7 @@ Use these references:
 
 - [docs/IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 - [docs/RELEASE_GATES.md](RELEASE_GATES.md)
+- [docs/VALIDATION_PLAYBOOK.md](VALIDATION_PLAYBOOK.md)
 - [docs/TECH_SPEC.md](TECH_SPEC.md)
 - [ROADMAP.md](../ROADMAP.md)
 
@@ -130,4 +131,3 @@ Weak contributions:
 - make a demo look better without improving the control plane
 - add undocumented shortcuts
 - increase apparent capability while reducing reliability
-

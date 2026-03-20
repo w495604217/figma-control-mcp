@@ -247,13 +247,90 @@ async function createInstance(input) {
     applyResize(instance, input.position);
   }
 
+  var applied = [];
+  var warnings = [];
+
+  // Variant and component properties via setProperties()
+  var propsToSet = {};
+  if (input.variantProperties) {
+    var keys = Object.keys(input.variantProperties);
+    for (var i = 0; i < keys.length; i++) {
+      propsToSet[keys[i]] = input.variantProperties[keys[i]];
+    }
+  }
+  if (input.componentProperties) {
+    var keys = Object.keys(input.componentProperties);
+    for (var i = 0; i < keys.length; i++) {
+      propsToSet[keys[i]] = input.componentProperties[keys[i]];
+    }
+  }
+
+  if (Object.keys(propsToSet).length > 0) {
+    var propKeys = Object.keys(propsToSet);
+    for (var pi = 0; pi < propKeys.length; pi++) {
+      var propName = propKeys[pi];
+      try {
+        var single = {};
+        single[propName] = propsToSet[propName];
+        instance.setProperties(single);
+        applied.push(propName);
+      } catch (err) {
+        warnings.push({
+          property: propName,
+          reason: err && err.message ? err.message : String(err)
+        });
+      }
+    }
+  }
+
+  // Text overrides via child name walk
+  if (input.textOverrides) {
+    var textKeys = Object.keys(input.textOverrides);
+    for (var ti = 0; ti < textKeys.length; ti++) {
+      var childName = textKeys[ti];
+      var newText = input.textOverrides[childName];
+      try {
+        var found = instance.findOne(function(n) {
+          return n.type === "TEXT" && n.name === childName;
+        });
+        if (!found) {
+          warnings.push({
+            property: "textOverride:" + childName,
+            reason: "Text node with name '" + childName + "' was not found in instance"
+          });
+        } else {
+          if (found.fontName === figma.mixed) {
+            throw new Error("Cannot override text with mixed fonts");
+          }
+          await figma.loadFontAsync(found.fontName);
+          found.characters = newText;
+          applied.push("textOverride:" + childName);
+        }
+      } catch (err) {
+        warnings.push({
+          property: "textOverride:" + childName,
+          reason: err && err.message ? err.message : String(err)
+        });
+      }
+    }
+  }
+
+  var result = {
+    createdNodeId: instance.id,
+    sourceComponentId: component.id,
+    sourceComponentKey: component.key || input.componentKey
+  };
+
+  if (applied.length > 0 || warnings.length > 0) {
+    result.overrideResults = {
+      applied: applied,
+      warnings: warnings
+    };
+  }
+
   return {
     touchedNodeIds: [instance.id],
-    result: {
-      createdNodeId: instance.id,
-      sourceComponentId: component.id,
-      sourceComponentKey: component.key || input.componentKey
-    }
+    result: result
   };
 }
 

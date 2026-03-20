@@ -75,6 +75,7 @@ Responsibilities:
 - group operations by batch
 - preserve execution ordering
 - support safer batched workflows
+- produce structured transaction outcomes (batch status, rollback result, per-operation three-state)
 
 ## 5. Figma Plugin Worker
 
@@ -106,6 +107,81 @@ Responsibilities:
 - execute raw silent commands
 - synchronize live channels into bridge sessions
 - run queued operations against websocket-backed sessions
+
+### Session Health Model
+
+`ensureTalkToFigmaSession` classifies session health using four states:
+
+| State | Meaning |
+|-------|---------|
+| `active` | Channel responded to sync; metadata is recent |
+| `stale` | Stored metadata exists but `lastHeartbeatAt` exceeds threshold (default 5 min) |
+| `unreachable` | Channel could not be contacted (timeout, connection refused) |
+| `unknown` | Insufficient metadata to assess health |
+
+Recovery strategy ordering: existing-session → explicit-channel → discover → launch.
+A stale session is automatically skipped (not synced) and falls through to discover/launch.
+Each attempt is recorded with `health`, optional `staleSince`, and optional `snapshotAge` fields.
+
+`staleThresholdMs` is configurable (default 300 000 ms = 5 min) and propagated through:
+- MCP tool `ensure_talk_to_figma_session` (Zod-validated, max 1 h)
+- HTTP route `POST /bridge/talk-to-figma/ensure-session`
+- Typed client `PluginBridgeClient.ensureTalkToFigmaSession`
+
+### Queue sessionHealth Semantics
+
+`executeTalkToFigmaSessionQueue` reports `sessionHealth` with **post-execution** semantics:
+- If operations executed and a post-sync succeeded, health is re-assessed from the freshly updated session metadata (should yield `active`).
+- If the queue was empty or sync was skipped, health reflects the pre-execution metadata assessment.
+- This ensures callers never see `stale`/`unknown` immediately after a successful run.
+
+**Remaining limitations:**
+- Health checks are metadata-only for the pre-sync gate. A session classified as "active" may still be unreachable at sync time.
+- Stale threshold is configurable but not adaptive.
+- No persistent health history across ensure calls.
+
+### 6.5 Instance Override and Variant Support
+
+Primary files:
+
+- `src/schemas.ts`
+- `src/talk-to-figma-adapter.ts`
+- `plugin-example/src/figma-adapter.ts`
+
+`create_instance` accepts three optional override fields:
+
+| Field | Type | Figma Runtime API |
+|-------|------|-------------------|
+| `variantProperties` | `Record<string, string>` | `instance.setProperties()` |
+| `componentProperties` | `Record<string, string \| boolean>` | `instance.setProperties()` |
+| `textOverrides` | `Record<string, string>` | Child name walk + font load + `characters` |
+
+**Override application strategy:**
+- Variant and component properties are applied one-at-a-time via `setProperties()` to isolate failures.
+- Text overrides walk the instance descendants, find text nodes by name, load fonts, and set `characters`.
+- Both adapter paths (plugin worker and talk-to-figma websocket) implement identical logic.
+
+**Override result shape:**
+```
+result.overrideResults = {
+  applied: string[]     // successfully applied property names
+  warnings: Array<{     // properties that could not be applied
+    property: string    // e.g. "Size" or "textOverride:Label"
+    reason: string      // error message
+  }>
+}
+```
+
+`overrideResults` is only present when at least one override was requested. If no overrides are requested, the result shape is unchanged from pre-Phase 5 behavior.
+
+**Unsupported override behavior:** Structured warnings, not errors. The instance is always created; override failures are reported per-property in `overrideResults.warnings`.
+
+**Remaining limitations:**
+- No support for nested instance swaps (child component replacement).
+- No style overrides on instance sub-nodes (fills, strokes, effects).
+- Text override matching is name-based (first match), not path-based.
+- `update_node` does not yet support variant/component property changes on existing instances.
+
 
 ## 7. Assets and Library Workflow
 
@@ -193,7 +269,7 @@ The Figma platform still limits deterministic full-library access. This is the l
 
 ### Transaction depth
 
-Batch semantics exist, but a full dry-run plus explicit compensation transaction layer is not complete yet.
+Structured transaction outcomes exist (batch status, rollback reporting, three-state operation tracking). True atomicity is still best-effort through Figma undo semantics. Dry-run support is deferred.
 
 ### Selector expressiveness
 
@@ -205,7 +281,43 @@ Instance import is stronger than before, but override depth is still incomplete.
 
 ### Observability
 
-The system still needs stronger trace logs, replay tooling, and execution diagnostics.
+Structured trace records are now emitted for three key control flows (ensure-session, queue-execution, materialize-asset). Traces are stored in a ring buffer with JSON file persistence and retrievable via HTTP routes. Deeper telemetry integration (metrics, distributed tracing) is not yet implemented.
+
+## §9 Tracing and Observability
+
+### Trace model
+
+Each trace record captures one control flow invocation:
+
+- **traceId** — unique identifier (UUID)
+- **parentTraceId** — links child traces to parent (e.g. materialize→ensure→queue)
+- **flowType** — `ensure-session` | `queue-execution` | `materialize-asset`
+- **startedAt / completedAt / durationMs** — timing data
+- **status** — `succeeded` | `failed`
+- **input / output** — sanitized snapshots for replay/audit
+- **warnings / errors** — non-fatal and fatal messages
+
+### Storage
+
+- In-memory ring buffer (default 100 traces) in `TraceStore`
+- Persisted to `traces.json` alongside `bridge-state.json`
+- Loaded on `BridgeStore.init()`, saved via `BridgeStore.persistTraces()`
+
+### Instrumented flows
+
+| Flow | File | Trace emission |
+|------|------|---------------|
+| ensure-session | `talk-to-figma-session.ts` | At all 4 success paths + failure throw |
+| queue-execution | `talk-to-figma-queue.ts` | Via `executeTalkToFigmaSessionQueueTraced()` wrapper |
+| materialize-asset | `materialize-figma-asset.ts` | Via `materializeFigmaAssetTraced()` wrapper |
+
+### HTTP retrieval routes
+
+| Route | Description |
+|-------|-------------|
+| `GET /bridge/traces` | Recent traces (default limit 20, optional `?flowType=` filter) |
+| `GET /bridge/traces/:traceId` | Single trace by ID |
+| `GET /bridge/traces/:traceId/tree` | Trace + all descendant traces |
 
 ## Recommended Next Engineering Steps
 
@@ -213,5 +325,4 @@ The system still needs stronger trace logs, replay tooling, and execution diagno
 2. expand selector grammar
 3. add richer transactional guarantees
 4. add instance override support
-5. add health and replay tooling
-
+5. add deeper telemetry integration (metrics, distributed tracing)

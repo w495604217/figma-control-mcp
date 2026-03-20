@@ -125,8 +125,10 @@ describe("executeQueuedOperations", () => {
       triggerUndo
     });
 
-    expect(result.processedCount).toBe(3);
-    expect(result.updates.every((update) => update.status === "failed")).toBe(true);
+     expect(result.processedCount).toBe(3);
+    expect(result.updates[0]?.status).toBe("failed");
+    expect(result.updates[1]?.status).toBe("failed");
+    expect(result.updates[2]?.status).toBe("skipped");
     expect(result.updates[0]?.error).toContain("rolled back");
     expect(result.updates[2]?.error).toContain("not executed");
     expect(commitUndo).not.toHaveBeenCalled();

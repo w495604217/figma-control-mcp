@@ -96,7 +96,10 @@ const createInstanceOperationSchema = z.object({
   componentKey: z.string().optional(),
   parentId: z.string().optional(),
   index: z.number().int().nonnegative().optional(),
-  position: figmaBoundsSchema.optional()
+  position: figmaBoundsSchema.optional(),
+  variantProperties: z.record(z.string(), z.string()).optional(),
+  componentProperties: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
+  textOverrides: z.record(z.string(), z.string()).optional()
 }).refine((value) => Boolean(value.componentId || value.componentKey), {
   message: "create_instance requires componentId or componentKey"
 });
@@ -171,7 +174,10 @@ const createInstanceBatchOperationSchema = z.object({
   parentId: z.string().optional(),
   parentPath: z.string().optional(),
   index: z.number().int().nonnegative().optional(),
-  position: figmaBoundsSchema.optional()
+  position: figmaBoundsSchema.optional(),
+  variantProperties: z.record(z.string(), z.string()).optional(),
+  componentProperties: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
+  textOverrides: z.record(z.string(), z.string()).optional()
 }).refine((value) => Boolean(value.componentId || value.componentKey), {
   message: "create_instance requires componentId or componentKey"
 });
@@ -273,7 +279,8 @@ export const operationStatusSchema = z.enum([
   "queued",
   "dispatched",
   "succeeded",
-  "failed"
+  "failed",
+  "skipped"
 ]);
 
 export const acknowledgeOperationsSchema = z.object({
@@ -305,10 +312,51 @@ export const figmaOperationRecordSchema = z.object({
   touchedNodeIds: z.array(z.string()).default([])
 });
 
+export const libraryIndexEntrySchema = z.object({
+  key: z.string().optional(),
+  componentId: z.string().optional(),
+  name: z.string(),
+  source: z.enum(["live-session", "rest-api", "desktop-panel"]),
+  sourceSessionId: z.string().optional(),
+  fileKey: z.string().optional(),
+  nodeId: z.string().optional(),
+  kind: z.enum(["component", "component_set"]),
+  description: z.string().optional(),
+  pageName: z.string().optional(),
+  discoveredAt: z.string()
+});
+
+export const libraryIndexDataSchema = z.object({
+  entries: z.record(z.string(), libraryIndexEntrySchema).default({})
+});
+
+export const traceFlowTypeSchema = z.enum([
+  "ensure-session",
+  "queue-execution",
+  "materialize-asset"
+]);
+
+export const traceRecordSchema = z.object({
+  traceId: z.string(),
+  parentTraceId: z.string().optional(),
+  flowType: traceFlowTypeSchema,
+  startedAt: z.string(),
+  completedAt: z.string(),
+  durationMs: z.number().nonnegative(),
+  status: z.enum(["succeeded", "failed"]),
+  sessionId: z.string().optional(),
+  channel: z.string().optional(),
+  input: z.record(z.string(), z.unknown()),
+  output: z.record(z.string(), z.unknown()),
+  warnings: z.array(z.string()).default([]),
+  errors: z.array(z.string()).default([])
+});
+
 export const bridgeStateSchema = z.object({
   sessions: z.record(z.string(), figmaSessionSchema).default({}),
   snapshots: z.record(z.string(), figmaSnapshotSchema).default({}),
-  operations: z.record(z.string(), figmaOperationRecordSchema).default({})
+  operations: z.record(z.string(), figmaOperationRecordSchema).default({}),
+  libraryIndex: libraryIndexDataSchema.optional()
 });
 
 export type FigmaBounds = z.infer<typeof figmaBoundsSchema>;

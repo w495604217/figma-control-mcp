@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { TraceStore } from "./trace-store.js";
 
 import {
   acknowledgeOperationsSchema,
@@ -14,6 +15,7 @@ import {
   type FigmaSnapshot,
   type FigmaSession
 } from "./schemas.js";
+import { LibraryIndex } from "./library-index.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -101,10 +103,14 @@ function chooseComponentCandidate(options: {
 export class BridgeStore {
   private state: BridgeState = createEmptyState();
   private readonly statePath: string;
+  private tracesPath: string;
   private initialized = false;
+  private traceStore: TraceStore = new TraceStore();
+  private libraryIndex: LibraryIndex = new LibraryIndex();
 
   constructor(statePath: string) {
     this.statePath = statePath;
+    this.tracesPath = join(dirname(statePath), "traces.json");
   }
 
   async init(): Promise<void> {
@@ -115,10 +121,13 @@ export class BridgeStore {
     try {
       const raw = await readFile(this.statePath, "utf8");
       this.state = bridgeStateSchema.parse(JSON.parse(raw));
+      this.libraryIndex = LibraryIndex.fromJSON(this.state.libraryIndex);
     } catch {
       this.state = createEmptyState();
       await this.persist();
     }
+
+    this.traceStore = await TraceStore.loadFrom(this.tracesPath);
 
     this.initialized = true;
   }
@@ -161,6 +170,16 @@ export class BridgeStore {
         selectionIds: snapshot.selectionIds,
         lastHeartbeatAt: nowIso()
       };
+    }
+
+    // Auto-populate the library index with components from this snapshot.
+    if (snapshot.components.length > 0) {
+      this.libraryIndex.addFromLiveSession(
+        snapshot.sessionId,
+        snapshot.components,
+        snapshot.fileKey ?? existingSession?.fileKey
+      );
+      this.state.libraryIndex = this.libraryIndex.toJSON();
     }
 
     await this.persist();
@@ -406,6 +425,21 @@ export class BridgeStore {
       componentId: canUseLocalId ? chosen.component.id : undefined,
       componentKey: chosen.component.key
     };
+  }
+
+  async getLibraryIndex(): Promise<LibraryIndex> {
+    await this.init();
+    return this.libraryIndex;
+  }
+
+  async getTraceStore(): Promise<TraceStore> {
+    await this.init();
+    return this.traceStore;
+  }
+
+  /** Persist trace store to its separate file. */
+  async persistTraces(): Promise<void> {
+    await this.traceStore.saveTo(this.tracesPath);
   }
 
   private async persist(): Promise<void> {
