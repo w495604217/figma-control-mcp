@@ -412,6 +412,7 @@ See [ROADMAP.md](ROADMAP.md).
 - [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 - [docs/RELEASE_GATES.md](docs/RELEASE_GATES.md)
 - [docs/OPUS_HANDOFF.md](docs/OPUS_HANDOFF.md)
+- [docs/OPUS_START_PROMPT.md](docs/OPUS_START_PROMPT.md)
 
 ## Contributing
 
