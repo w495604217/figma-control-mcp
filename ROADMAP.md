@@ -14,6 +14,12 @@ to:
 
 ## Version Plan
 
+Execution references:
+
+- [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
+- [docs/RELEASE_GATES.md](docs/RELEASE_GATES.md)
+- [docs/OPUS_HANDOFF.md](docs/OPUS_HANDOFF.md)
+
 ## `0.0.1-beta`
 
 Focus:
@@ -131,4 +137,3 @@ Why it matters:
 
 - makes debugging and contribution far easier
 - creates a better open-source collaboration surface
-
