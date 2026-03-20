@@ -418,13 +418,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 MIT. See [LICENSE](LICENSE).
 
-直接走完整链路，把 Assets 结果落到画布并自动选中：
+Run the full hybrid chain to materialize an asset, place it on the canvas, and automatically select the inserted result:
 
 ```bash
 npm run bridge:materialize-asset -- Toolbar talk-to-figma:x2lmbp3m
 ```
 
-如果不想手动提供 session，也可以直接调用 HTTP route，让它自动 discover：
+If you do not want to provide a session manually, you can also call the HTTP route and let it discover a session automatically:
 
 ```bash
 curl -s -X POST http://127.0.0.1:3847/bridge/materialize-asset \
@@ -432,64 +432,64 @@ curl -s -X POST http://127.0.0.1:3847/bridge/materialize-asset \
   -d '{"query":"Toolbar","dryRun":true}'
 ```
 
-说明：
+Notes:
 
-- 这是桌面 OCR 扫描，不依赖 Figma Plugin API
-- 适合回答“当前 Figma app 里我能看到哪些 kit”
-- OCR 结果可能有轻微拼写误差，但已经足够做后续点击/检索的候选集
+- this is a desktop OCR scan and does not depend on the Figma Plugin API
+- it is useful for answering questions like “which kits are currently visible in the Figma app”
+- OCR output may contain minor spelling noise, but it is usually good enough for follow-up clicking and search candidate generation
 
-## 当前完成度
+## Current Completion Level
 
-- 画布内静默控制：可用
-- talk-to-figma channel 探测、discover、sync、queue 执行：可用
-- Assets 面板库可见性扫描：可用
-- Assets 搜索：可用
-- 一键落图 `materialize_figma_asset`：可用
-- 自动选中并同步插入结果：可用
-- 当前最大的现实边界仍然是 Figma 官方没有开放“全量 library 枚举/启用”API，所以这部分仍需桌面层兜底
+- silent in-canvas control: usable
+- `talk-to-figma` probing, discovery, synchronization, and queued execution: usable
+- visible-library scanning from the Assets panel: usable
+- Assets search: usable
+- one-shot asset materialization with `materialize_figma_asset`: usable
+- automatic selection and synchronization of inserted results: usable
+- the biggest remaining real-world boundary is that Figma still does not expose a full deterministic API for library enumeration and enablement, so desktop fallback is still required in that area
 
-## 下一步应该补什么
+## Recommended Next Work
 
-要达到接近 Pencil MCP 的控制程度，下一步建议按这个顺序扩：
+To move closer to a true Pencil-like control surface, the next expansions should happen in roughly this order:
 
-1. 扩展更多节点类型和 patch 白名单，减少“字段被忽略”的面积
-2. 做 dry-run / capability probing，让 agent 先知道哪些修改在当前文档可执行
-3. 增强路径解析的歧义提示和 selector 能力
-4. 增加更稳定的 batch 恢复策略，不只依赖 undo
-5. 加一层 “design AST diff” 输出，方便 agent 做增量操作
+1. extend node-type coverage and patch whitelists so fewer requested fields are ignored
+2. add dry-run and capability probing so an agent can know what is executable before mutating the document
+3. improve selector power and ambiguity reporting in the path resolver
+4. add stronger batch recovery semantics beyond undo-only rollback
+5. add a design-AST diff layer to support safer incremental operations
 
-详细 plugin 接入契约见：
+For the detailed plugin integration contract, see:
 
 - `docs/plugin-bridge-contract.md`
 - `plugin-example/README.md`
 - `examples/update-hero-button.json`
 - `examples/create-footer-cta.json`
 
-## 一个最小 plugin bridge 工作流
+## Minimal Plugin Bridge Workflow
 
-1. Plugin 启动后调用 `register_figma_session`
-2. Plugin 抓取当前页面节点图，调用 `publish_figma_snapshot`
-3. Agent 调用 `enqueue_figma_operations`
-4. Plugin 轮询 `pull_figma_operations`
-5. Plugin 执行 Figma Plugin API
-6. Plugin 调用 `acknowledge_figma_operations`
-7. Plugin 再次调用 `publish_figma_snapshot`
+1. the plugin starts and calls `register_figma_session`
+2. the plugin captures a lightweight page graph and calls `publish_figma_snapshot`
+3. the agent calls `enqueue_figma_operations`
+4. the plugin polls `pull_figma_operations`
+5. the plugin executes operations through the Figma Plugin API
+6. the plugin calls `acknowledge_figma_operations`
+7. the plugin publishes a fresh snapshot again through `publish_figma_snapshot`
 
-## 跨 kit 导入工作流
+## Cross-Kit Import Workflow
 
-1. 在 kit 文件标签页启动 worker，让它把整份 kit 的 published components 上传到 bridge
-2. 用 `search_live_figma_components` 或 `npm run bridge:components` 找到目标组件的 `componentKey`
-3. 在目标项目文件标签页，对目标 session enqueue 一个 `create_instance`
-4. plugin 在目标文件里调用 `importComponentByKeyAsync` 并直接创建实例
+1. start a worker in the source kit file so it can publish the kit’s component catalog into the bridge
+2. use `search_live_figma_components` or `npm run bridge:components` to find the target `componentKey`
+3. in the target project file, enqueue a `create_instance` operation for the target session
+4. the plugin imports the component with `importComponentByKeyAsync` and creates the instance directly in the target file
 
-## 为什么这条路更接近 Pencil
+## Why This Direction Is Closer to Pencil
 
-- 不是 OCR / 浏览器点击
-- 画布内修改已经可以走 websocket 静默命令，不需要和用户争抢鼠标
-- 结构化 enqueue/batch 现在也可以直接落到 talk-to-figma session，不必手写 raw websocket command
-- 桌面自动化只保留给 library discovery / Assets 面板这种官方 API 没开放的区域
-- 插件启动本身已经可以走 macOS 菜单自动化，不必再依赖 Quick Actions 搜索
-- 不是网页 DOM 猜测
-- 每个操作都有结构化结果
-- 可做幂等、重试、回滚和 diff
-- 可以逐步长成真正的“Figma AST 控制层”
+- it is not based primarily on OCR or browser clicking
+- in-canvas mutations can already run through silent websocket commands without fighting the user for mouse control
+- structured enqueue and batch execution can already target a `talk-to-figma` session directly instead of requiring handwritten raw websocket commands
+- desktop automation is reserved for areas the official API still does not expose, such as library discovery in the Assets panel
+- plugin launch itself can already be automated through the macOS menu layer instead of depending on quick-action search
+- it is not based on DOM guessing
+- every operation has a structured result
+- the architecture can support idempotency, retries, rollback, and diffing
+- it can gradually evolve into a true Figma AST control layer

@@ -1,10 +1,10 @@
 # Plugin Bridge Contract
 
-这份文档定义的是 “Figma Plugin 端应该怎么接入 `figma-control-mcp`”。
+This document defines how a Figma plugin should integrate with `figma-control-mcp`.
 
-目标不是让 agent 直接控制 Figma 网页，而是让 agent 通过 MCP 下发结构化指令，由 plugin 在 Figma 原生运行时执行。
+The goal is not to let an agent control the Figma website directly. The goal is to let an agent send structured instructions through MCP and have a plugin execute them inside the native Figma runtime.
 
-## 推荐目录
+## Recommended Directory Layout
 
 ```text
 figma-plugin/
@@ -19,18 +19,18 @@ figma-plugin/
       operations.ts
 ```
 
-## 推荐技术栈
+## Recommended Stack
 
 - Plugin: TypeScript
-- Bundler: Vite 或 tsup
+- Bundler: Vite or tsup
 - Runtime bridge: Figma Plugin API + UI iframe `fetch`
 - Schema validation: Zod
 
-## Plugin 端必须做的事
+## Required Plugin Responsibilities
 
-### 1. 注册 session
+### 1. Register a session
 
-Plugin 启动后立即向本地 HTTP bridge 注册：
+When the plugin starts, it should immediately register with the local HTTP bridge:
 
 ```json
 {
@@ -40,21 +40,21 @@ Plugin 启动后立即向本地 HTTP bridge 注册：
   "pageId": "<current page id>",
   "pageName": "<current page name>",
   "selectionIds": ["..."],
-  "pluginVersion": "0.1.0",
-  "bridgeVersion": "0.1.0"
+  "pluginVersion": "0.0.1-beta",
+  "bridgeVersion": "0.0.1-beta"
 }
 ```
 
-### 2. 发布快照
+### 2. Publish a snapshot
 
-最小快照至少应包含：
+At minimum, a snapshot should include:
 
-- 当前文件和页面信息
-- 当前 selection
-- 当前页面节点列表
-- 变量列表
+- current file and page information
+- current selection
+- current page node list
+- variable list
 
-建议不要一上来把全文件所有 geometry 全量回传，先做“轻快照”：
+Do not start by returning full geometry for the entire document. Prefer a lightweight snapshot first:
 
 - `id`
 - `name`
@@ -65,22 +65,22 @@ Plugin 启动后立即向本地 HTTP bridge 注册：
 - `locked`
 - `bounds`
 
-## 操作执行循环
+## Operation Execution Loop
 
-Plugin 建议维护一个固定轮询循环：
+The plugin should usually maintain a stable polling loop:
 
 1. `POST /bridge/register-session`
 2. `POST /bridge/snapshot`
 3. `POST /bridge/pull-operations`
-4. 执行操作
+4. execute operations
 5. `POST /bridge/acknowledge`
-6. 如果有结构变化，再次 `POST /bridge/snapshot`
+6. if the document structure changed, `POST /bridge/snapshot` again
 
-## MCP 操作到 Figma API 的映射
+## Mapping MCP Operations to the Figma API
 
 ### `create_node`
 
-Plugin 侧需要根据 `node.type` 做工厂映射，例如：
+The plugin side should map `node.type` to the correct Figma factory call, for example:
 
 - `FRAME` -> `figma.createFrame()`
 - `TEXT` -> `figma.createText()`
@@ -88,16 +88,16 @@ Plugin 侧需要根据 `node.type` 做工厂映射，例如：
 - `ELLIPSE` -> `figma.createEllipse()`
 - `COMPONENT` -> `figma.createComponent()`
 
-然后：
+Then:
 
-1. 应用基础属性
-2. 插入到 `parentId`
-3. 按 `index` 调整 sibling 顺序
-4. 如有 `position`，设置 `x/y/resize`
+1. apply base properties
+2. insert into `parentId`
+3. adjust sibling order according to `index`
+4. if `position` is present, apply `x/y/resize`
 
 ### `update_node`
 
-推荐只允许 patch 白名单属性：
+Prefer a patch whitelist instead of unrestricted object merging:
 
 - `name`
 - `visible`
@@ -116,36 +116,36 @@ Plugin 侧需要根据 `node.type` 做工厂映射，例如：
 - `fontName`
 - `fontSize`
 
-不要直接做无限制对象合并。
+Do not apply unbounded deep merges to runtime nodes.
 
 ### `delete_node`
 
-直接调用 `node.remove()`，但要先防守：
+You can call `node.remove()` directly, but first guard against:
 
-- 节点是否存在
-- 节点是否允许删除
-- 是否为当前 page / document 根节点
+- missing nodes
+- nodes that should not be deleted
+- current page or document root nodes
 
 ### `move_node`
 
-推荐流程：
+Recommended flow:
 
-1. 找到目标 node
-2. 找到目标 parent
-3. 调用 `appendChild` 或者插入到指定 index
-4. 如传了 `position`，再设置坐标
+1. resolve the target node
+2. resolve the target parent
+3. call `appendChild` or insert at the requested index
+4. if `position` is provided, then apply coordinates
 
 ### `set_variable`
 
-第一版建议只支持已经存在的 variable id，先不做 collection 自动创建。
+For the first iteration, only support already-existing variable ids. Do not auto-create collections yet.
 
 ### `set_selection`
 
-直接更新 `figma.currentPage.selection`
+Update `figma.currentPage.selection` directly.
 
-## 插件执行结果格式
+## Plugin Execution Result Format
 
-每个 operation 执行后返回：
+Each operation should return something like:
 
 ```json
 {
@@ -158,7 +158,7 @@ Plugin 侧需要根据 `node.type` 做工厂映射，例如：
 }
 ```
 
-失败则返回：
+On failure, return something like:
 
 ```json
 {
@@ -168,23 +168,23 @@ Plugin 侧需要根据 `node.type` 做工厂映射，例如：
 }
 ```
 
-## 第一阶段不要做的事
+## What Not To Do In The First Phase
 
-先不要做这些，否则复杂度会快速失控：
+Avoid these early on, or complexity will grow too quickly:
 
-- 直接对 Figma 网页做 DOM 自动化
-- 把所有 plugin 行为都塞进一个超大 tool
-- 自动推断任意节点路径
-- 一次性支持所有 Figma node 类型
-- 自动创建本地字体映射
-- 自动创建复杂 variable collection / mode
+- direct DOM automation against the Figma website
+- putting all plugin behavior into one giant tool
+- automatic inference for arbitrary node paths
+- full support for every Figma node type on day one
+- automatic local font mapping
+- automatic creation of complex variable collections or modes
 
-## 最小可用里程碑
+## Minimum Useful Milestones
 
 ### M1
 
-- session 注册
-- 页面轻快照
+- session registration
+- lightweight page snapshots
 - `create_node`
 - `update_node`
 - `delete_node`
@@ -194,21 +194,21 @@ Plugin 侧需要根据 `node.type` 做工厂映射，例如：
 
 - `move_node`
 - `set_variable`
-- selection/path resolver
-- 批量执行结果汇总
+- selection and path resolver
+- aggregated batch execution results
 
 ### M3
 
 - dry-run
-- 差异对比
-- 重试/回滚策略
-- 更完整的 layout/style patch
+- structural diffing
+- retry and rollback strategy
+- broader layout and style patch coverage
 
-## 什么时候它才算接近 Pencil MCP
+## When It Starts To Feel Close To Pencil MCP
 
-当下面四件事都具备时，才算真的接近：
+It becomes meaningfully close only when all four of these are true:
 
-1. Agent 拿到的是结构化页面树，不是网页截图
-2. 操作是节点级的，不是鼠标点击级的
-3. 每个操作有明确成功/失败和 touched nodes
-4. 快照和操作可以反复闭环
+1. the agent receives a structured page tree instead of a screenshot
+2. operations are node-level rather than click-level
+3. every operation returns clear success or failure with touched nodes
+4. snapshots and operations can repeatedly close the loop
