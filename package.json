@@ -1,0 +1,66 @@
+{
+  "name": "figma-control-mcp",
+  "version": "0.0.1-beta",
+  "type": "module",
+  "description": "A Pencil-like hybrid MCP control layer for Figma: silent canvas execution plus library-aware desktop fallback.",
+  "homepage": "https://github.com/w495604217/figma-control-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w495604217/figma-control-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/w495604217/figma-control-mcp/issues"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "bridge:assets": "tsx src/bridge-cli.ts assets",
+    "bridge:asset-insert": "tsx src/bridge-cli.ts asset-insert",
+    "bridge:asset-insert-sync": "tsx src/bridge-cli.ts asset-insert-sync",
+    "bridge:asset-search": "tsx src/bridge-cli.ts asset-search",
+    "bridge:materialize-asset": "tsx src/bridge-cli.ts materialize-asset",
+    "bridge:figma-dev-plugins": "tsx src/bridge-cli.ts figma-dev-plugins",
+    "bridge:figma-launch-discover": "tsx src/bridge-cli.ts figma-launch-discover",
+    "bridge:figma-launch-plugin": "tsx src/bridge-cli.ts figma-launch-plugin",
+    "bridge:instantiate-component": "tsx src/bridge-cli.ts instantiate-component",
+    "bridge:published-components": "tsx src/bridge-cli.ts published-components",
+    "bridge:talk-channels": "tsx src/bridge-cli.ts talk-channels",
+    "bridge:talk-command": "tsx src/bridge-cli.ts talk-command",
+    "bridge:talk-discover": "tsx src/bridge-cli.ts talk-discover",
+    "bridge:talk-ensure": "tsx src/bridge-cli.ts talk-ensure",
+    "bridge:talk-probe": "tsx src/bridge-cli.ts talk-probe",
+    "bridge:talk-run-queue": "tsx src/bridge-cli.ts talk-run-queue",
+    "bridge:talk-sync": "tsx src/bridge-cli.ts talk-sync",
+    "build:plugin": "tsup --config plugin-example/tsup.config.ts && cp plugin-example/manifest.json plugin-example/ui.html plugin-dist/",
+    "bridge:components": "tsx src/bridge-cli.ts components",
+    "bridge:status": "tsx src/bridge-cli.ts status",
+    "bridge:resolve": "tsx src/bridge-cli.ts resolve",
+    "bridge:enqueue": "tsx src/bridge-cli.ts enqueue",
+    "dev": "tsx src/index.ts",
+    "figma:plugin": "tsx src/register-dev-plugin.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:plugin": "tsc -p tsconfig.plugin.json --noEmit"
+  },
+  "keywords": [
+    "figma",
+    "mcp",
+    "plugin",
+    "automation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.123.0",
+    "@types/node": "^24.3.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "sessionId": "replace-with-your-session-id",
+  "description": "Rename the second button inside Hero and scroll it into view",
+  "operations": [
+    {
+      "type": "update_node",
+      "nodePath": "Hero/Button[2]",
+      "patch": {
+        "name": "Secondary CTA"
+      }
+    },
+    {
+      "type": "run_plugin_action",
+      "action": "scroll_into_view",
+      "payload": {
+        "nodePath": "Hero/Button[2]"
+      }
+    }
+  ]
+}

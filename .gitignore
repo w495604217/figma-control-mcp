@@ -1,0 +1,11 @@
+node_modules/
+dist/
+plugin-dist/
+.figma-control-mcp/
+coverage/
+*.log
+.DS_Store
+tmp/
+.env
+.env.*
+

@@ -1,0 +1,22 @@
+{
+  "sessionId": "replace-with-your-session-id",
+  "description": "Create a new footer CTA frame under Footer",
+  "operations": [
+    {
+      "type": "create_node",
+      "parentPath": "Footer",
+      "node": {
+        "type": "FRAME",
+        "name": "Footer CTA",
+        "width": 240,
+        "height": 64
+      },
+      "position": {
+        "x": 0,
+        "y": 0,
+        "width": 240,
+        "height": 64
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Figma Control MCP Worker",
+  "id": "1500000000000000001",
+  "api": "1.0.0",
+  "editorType": ["figma"],
+  "main": "code.js",
+  "ui": "ui.html",
+  "permissions": ["teamlibrary"],
+  "enablePrivatePluginApi": true,
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["http://127.0.0.1:3847", "http://localhost:3847"]
+  },
+  "menu": [
+    {
+      "name": "Start Worker",
+      "command": "start-worker"
+    },
+    {
+      "name": "Sync Once",
+      "command": "sync-once"
+    }
+  ]
+}

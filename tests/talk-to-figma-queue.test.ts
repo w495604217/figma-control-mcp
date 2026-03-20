@@ -1,0 +1,153 @@
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { describe, expect, it, vi } from "vitest";
+
+import { BridgeStore } from "../src/bridge-store.js";
+import { executeTalkToFigmaSessionQueue } from "../src/talk-to-figma-queue.js";
+
+function extractOperationType(code: string): string | null {
+  const match = /const input = (\{[\s\S]*?\});/.exec(code);
+  if (!match?.[1]) {
+    return null;
+  }
+  const parsed = JSON.parse(match[1]) as { type?: string };
+  return typeof parsed.type === "string" ? parsed.type : null;
+}
+
+describe("executeTalkToFigmaSessionQueue", () => {
+  it("executes queued operations, acknowledges them, and syncs the snapshot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "figma-control-talk-queue-"));
+    const store = new BridgeStore(join(dir, "bridge-state.json"));
+    await store.init();
+
+    await store.registerSession({
+      sessionId: "talk-to-figma:canvas-room",
+      fileName: "GlobeGlider",
+      metadata: {
+        source: "talk-to-figma",
+        channel: "canvas-room"
+      }
+    });
+
+    await store.enqueueOperations({
+      sessionId: "talk-to-figma:canvas-room",
+      operations: [
+        {
+          type: "create_node",
+          node: {
+            type: "FRAME",
+            name: "Queued frame"
+          },
+          position: {
+            x: 240,
+            y: 160,
+            width: 220,
+            height: 100
+          }
+        }
+      ]
+    });
+
+    const executeCommand = vi.fn(async (input: {
+      command: string;
+      params?: Record<string, unknown>;
+    }) => {
+      if (input.command === "get_variables") {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "canvas-room",
+          joinedAt: "2026-03-19T00:00:00.000Z",
+          requestId: "req-vars",
+          command: "get_variables",
+          result: [],
+          progressUpdates: []
+        };
+      }
+
+      const code = typeof input.params?.code === "string" ? input.params.code : "";
+      if (code.includes("figma.commitUndo()")) {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "canvas-room",
+          joinedAt: "2026-03-19T00:00:00.000Z",
+          requestId: "req-undo",
+          command: "execute_code",
+          result: { success: true, result: { ok: true } },
+          progressUpdates: []
+        };
+      }
+
+      const operationType = extractOperationType(code);
+      if (operationType === "create_node") {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "canvas-room",
+          joinedAt: "2026-03-19T00:00:00.000Z",
+          requestId: "req-op",
+          command: "execute_code",
+          result: {
+            success: true,
+            result: {
+              touchedNodeIds: ["node-created"],
+              result: {
+                createdNodeId: "node-created"
+              }
+            }
+          },
+          progressUpdates: []
+        };
+      }
+
+      return {
+        ok: true as const,
+        wsUrl: "ws://127.0.0.1:3055",
+        channel: "canvas-room",
+        joinedAt: "2026-03-19T00:00:00.000Z",
+        requestId: "req-sync",
+        command: "execute_code",
+        result: {
+          success: true,
+          result: {
+            fileKey: "file-key-1",
+            fileName: "GlobeGlider",
+            pageId: "0:1",
+            pageName: "Page 1",
+            selectionIds: [],
+            nodes: [
+              {
+                id: "node-created",
+                name: "Queued frame",
+                type: "FRAME",
+                parentId: "0:1",
+                childIds: []
+              }
+            ],
+            components: []
+          }
+        },
+        progressUpdates: []
+      };
+    });
+
+    const result = await executeTalkToFigmaSessionQueue({
+      store,
+      sessionId: "talk-to-figma:canvas-room",
+      client: { executeCommand }
+    });
+
+    expect(result.pulledCount).toBe(1);
+    expect(result.processedCount).toBe(1);
+    expect(result.snapshotSynced).toBe(true);
+    expect(result.updates[0]?.status).toBe("succeeded");
+    expect(result.acknowledged[0]?.status).toBe("succeeded");
+
+    const snapshot = await store.getSnapshot("talk-to-figma:canvas-room");
+    expect(snapshot?.nodes[0]?.id).toBe("node-created");
+    expect(executeCommand).toHaveBeenCalled();
+  });
+});

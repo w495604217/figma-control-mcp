@@ -1,0 +1,17 @@
+{
+  "sessionId": "target-session-id",
+  "description": "Import a published button component from a live kit session",
+  "operations": [
+    {
+      "type": "create_instance",
+      "componentKey": "published-component-key",
+      "parentPath": "Hero",
+      "position": {
+        "x": 120,
+        "y": 320,
+        "width": 240,
+        "height": 56
+      }
+    }
+  ]
+}

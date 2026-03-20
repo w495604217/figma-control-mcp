@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Figma Control MCP Worker</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      body {
+        margin: 0;
+        background: #111827;
+        color: #e5e7eb;
+      }
+
+      header {
+        padding: 10px 12px;
+        border-bottom: 1px solid #1f2937;
+        font-size: 12px;
+        color: #93c5fd;
+      }
+
+      #log {
+        box-sizing: border-box;
+        height: 220px;
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        white-space: pre-wrap;
+        line-height: 1.45;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>Figma Control MCP Worker Debug</header>
+    <pre id="log">waiting for plugin startup...</pre>
+    <script>
+      const logEl = document.getElementById("log");
+
+      function appendLine(line) {
+        logEl.textContent += `\n${line}`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      window.onmessage = (event) => {
+        const pluginMessage = event.data?.pluginMessage;
+        if (!pluginMessage || pluginMessage.type !== "log") {
+          return;
+        }
+
+        appendLine(pluginMessage.message);
+      };
+    </script>
+  </body>
+</html>
