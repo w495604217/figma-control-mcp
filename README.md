@@ -26,6 +26,16 @@ That means:
 
 This is not yet a full Pencil-equivalent implementation, but it is already a practical stable foundation for real design automation workflows.
 
+## Use with Antigravity
+
+This project can already be used by Antigravity as an external MCP server.
+
+See:
+
+- [`docs/ANTIGRAVITY_SETUP.md`](/Users/wuchaodong/Desktop/工作流/首席宣传官/figma-control-mcp/docs/ANTIGRAVITY_SETUP.md)
+- [`examples/antigravity-mcp.config.toml`](/Users/wuchaodong/Desktop/工作流/首席宣传官/figma-control-mcp/examples/antigravity-mcp.config.toml)
+- [`scripts/run-antigravity-mcp.sh`](/Users/wuchaodong/Desktop/工作流/首席宣传官/figma-control-mcp/scripts/run-antigravity-mcp.sh)
+
 ## What This Project Is
 
 This project is a **Pencil-like hybrid MCP control system for Figma**.
