@@ -8,7 +8,6 @@ import {
   clickPoint,
   dragBetween,
   ocrImage,
-  pasteText,
   readImageSize,
   replaceFocusedText,
   sleep,
@@ -86,7 +85,7 @@ export type FigmaAssetsSearchResult = {
 
 type SearchFieldFocus = {
   clickPoint: DesktopPoint;
-  clearPoint?: DesktopPoint;
+  clickPoints: DesktopPoint[];
   placeholderVisible: boolean;
   rawText?: string;
   visibleText?: string;
@@ -145,6 +144,61 @@ function computeSearchFieldPoint(window: DesktopAgentWindow): DesktopPoint {
   };
 }
 
+function dedupeDesktopPoints(points: DesktopPoint[]): DesktopPoint[] {
+  const seen = new Set<string>();
+  return points.filter((point) => {
+    const key = `${Math.round(point.x)}:${Math.round(point.y)}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+export function buildSearchFieldClickPoints(payload: {
+  window: DesktopAgentWindow;
+  imageSize: {
+    width: number;
+    height: number;
+  };
+  candidate?: DesktopAgentOcrResult;
+}): DesktopPoint[] {
+  const fallback = computeSearchFieldPoint(payload.window);
+  if (!payload.candidate?.bbox_px) {
+    return [fallback];
+  }
+
+  const { x, y, width, height } = payload.candidate.bbox_px;
+  const midY = y + (height / 2);
+  const interiorRightPx = x + Math.max(24, width - 56);
+  const candidatesPx: DesktopPoint[] = [
+    {
+      x: x + Math.min(40, width * 0.2),
+      y: midY
+    },
+    {
+      x: x + Math.max(24, width * 0.45),
+      y: midY
+    },
+    {
+      x: interiorRightPx,
+      y: midY
+    },
+    {
+      x: x + Math.min(20, width * 0.1),
+      y: y + Math.max(12, height * 0.35)
+    }
+  ];
+
+  const absoluteCandidates = candidatesPx
+    .map((candidate) => pixelToWindowPoint(payload.window, payload.imageSize, candidate))
+    .filter((candidate): candidate is DesktopPoint => Boolean(candidate))
+    .map((candidate) => toAbsolute(payload.window, candidate));
+
+  return dedupeDesktopPoints([fallback, ...absoluteCandidates]);
+}
+
 function detectSearchFieldPoint(payload: {
   window: DesktopAgentWindow;
   imageSize: {
@@ -183,26 +237,18 @@ function detectSearchFieldPoint(payload: {
     return undefined;
   }
 
-  const focusAnchorPx = candidate.bbox_px
-    ? {
-      x: candidate.bbox_px.x + Math.min(40, candidate.bbox_px.width * 0.2),
-      y: candidate.bbox_px.y + (candidate.bbox_px.height / 2)
-    }
-    : candidate.center_px;
-  const focusAnchorPt = pixelToWindowPoint(payload.window, payload.imageSize, focusAnchorPx);
-  const clickPoint = toAbsolute(payload.window, focusAnchorPt ?? localPt);
-  const clearPoint = candidate.bbox_px
-    ? toAbsolute(payload.window, {
-      x: ((candidate.bbox_px.x + candidate.bbox_px.width + 42) / payload.imageSize.width) * payload.window.w,
-      y: ((candidate.bbox_px.y + (candidate.bbox_px.height / 2)) / payload.imageSize.height) * payload.window.h
-    })
-    : undefined;
+  const clickPoints = buildSearchFieldClickPoints({
+    window: payload.window,
+    imageSize: payload.imageSize,
+    candidate
+  });
+  const clickPoint = clickPoints[0] ?? toAbsolute(payload.window, localPt);
 
   return {
     clickPoint: normalizeSearchFieldText(candidate.text).includes("Search all libraries")
       ? computeSearchFieldPoint(payload.window)
       : clickPoint,
-    clearPoint,
+    clickPoints,
     placeholderVisible: normalizeSearchFieldText(candidate.text).includes("Search all libraries"),
     rawText: candidate.text,
     visibleText: normalizeSearchFieldText(candidate.text)
@@ -435,17 +481,25 @@ async function focusSearchField(payload: {
     height: number;
   };
   results: DesktopAgentOcrResult[];
-}): Promise<SearchFieldFocus> {
+}, attempt = 0): Promise<SearchFieldFocus> {
   const detected = detectSearchFieldPoint(payload);
   const focus = detected ?? {
     clickPoint: computeSearchFieldPoint(payload.window),
+    clickPoints: [computeSearchFieldPoint(payload.window)],
     placeholderVisible: false
   };
+  const clickPoints = focus.clickPoints.length > 0 ? focus.clickPoints : [focus.clickPoint];
+  const selectedPoint = clickPoints[Math.min(attempt, clickPoints.length - 1)] ?? focus.clickPoint;
   await ensureFigmaFrontmost();
-  debugStep(`focusSearchField clickPoint x=${Math.round(focus.clickPoint.x)} y=${Math.round(focus.clickPoint.y)}`);
-  await clickPoint(focus.clickPoint);
+  debugStep(`focusSearchField attempt=${attempt + 1} clickPoint x=${Math.round(selectedPoint.x)} y=${Math.round(selectedPoint.y)} candidates=${clickPoints.length}`);
+  await clickPoint(selectedPoint);
+  await sleep(90);
+  await clickPoint(selectedPoint);
   await sleep(140);
-  return focus;
+  return {
+    ...focus,
+    clickPoint: selectedPoint
+  };
 }
 
 async function pasteQuery(query: string, focus: SearchFieldFocus): Promise<void> {
@@ -455,20 +509,10 @@ async function pasteQuery(query: string, focus: SearchFieldFocus): Promise<void>
 
   await ensureFigmaFrontmost();
   if (focus.placeholderVisible) {
-    debugStep(`pasteQuery pasteText query=${query}`);
-    await pasteText(query);
-    return;
+    debugStep(`pasteQuery placeholder replaceFocusedText query=${query}`);
+  } else {
+    debugStep(`pasteQuery replaceFocusedText query=${query}`);
   }
-
-  if (focus.clearPoint) {
-    debugStep(`pasteQuery clearAndPaste x=${Math.round(focus.clearPoint.x)} y=${Math.round(focus.clearPoint.y)} query=${query}`);
-    await clickPoint(focus.clearPoint);
-    await sleep(120);
-    await pasteText(query);
-    return;
-  }
-
-  debugStep(`pasteQuery replaceFocusedText query=${query}`);
   await replaceFocusedText(query);
 }
 
@@ -496,7 +540,7 @@ async function applySearchQuery(options: {
     debugStep(`applySearchQuery attempt=${attempt + 1}`);
     await ensureFigmaFrontmost();
     const activated = await activateAssetsTab(options.windowTitle);
-    const focus = await focusSearchField(activated);
+    const focus = await focusSearchField(activated, attempt);
     await pasteQuery(options.query, focus);
     await sleep(options.settleMs ?? 520);
 

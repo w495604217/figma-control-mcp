@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { computeCanvasDropPoint, extractAssetSearchMatches, searchFieldContainsQuery } from "../src/figma-assets-workflow.js";
+import {
+  buildSearchFieldClickPoints,
+  computeCanvasDropPoint,
+  extractAssetSearchMatches,
+  searchFieldContainsQuery
+} from "../src/figma-assets-workflow.js";
 
 describe("figma-assets-workflow", () => {
   it("keeps canvas drop point inside the likely editable canvas area", () => {
@@ -82,5 +87,42 @@ describe("figma-assets-workflow", () => {
         }
       ]
     }, "Toolbar")).toBe(false);
+  });
+
+  it("builds multiple in-field search click candidates before falling back", () => {
+    const points = buildSearchFieldClickPoints({
+      window: {
+        x: 669,
+        y: 198,
+        w: 1400,
+        h: 900
+      },
+      imageSize: {
+        width: 3024,
+        height: 2024
+      },
+      candidate: {
+        text: "Q HomeNavigationTab Bar",
+        bbox_px: {
+          x: 153.837,
+          y: 460.998,
+          width: 294.488,
+          height: 31.002
+        },
+        center_px: {
+          x: 301.081,
+          y: 476.499
+        }
+      }
+    });
+
+    expect(points).toHaveLength(5);
+    expect(points[0]).toEqual({
+      x: 711,
+      y: 397
+    });
+    expect(points[1]?.x).toBeGreaterThan(points[0]?.x ?? 0);
+    expect(points[2]?.x).toBeGreaterThan(points[1]?.x ?? 0);
+    expect(points[4]).not.toEqual(points[0]);
   });
 });

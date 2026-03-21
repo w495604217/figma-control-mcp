@@ -319,10 +319,19 @@ Each trace record captures one control flow invocation:
 | `GET /bridge/traces/:traceId` | Single trace by ID |
 | `GET /bridge/traces/:traceId/tree` | Trace + all descendant traces |
 
+### Typed client methods (`PluginBridgeClient`)
+
+| Method | Route | Returns |
+|--------|-------|---------|
+| `getTraces({ limit?, flowType? })` | `GET /bridge/traces` | `{ traces: TraceRecord[]; count: number }` |
+| `getTrace(traceId)` | `GET /bridge/traces/:traceId` | `TraceRecord` |
+| `getTraceTree(traceId)` | `GET /bridge/traces/:traceId/tree` | `{ traceId: string; tree: TraceRecord[]; count: number }` |
+
+See `docs/TRACE_DEBUGGING.md` for usage examples.
+
 ## Recommended Next Engineering Steps
 
-1. build a stronger library index layer
-2. expand selector grammar
-3. add richer transactional guarantees
-4. add instance override support
-5. add deeper telemetry integration (metrics, distributed tracing)
+1. add richer telemetry integration (metrics, distributed tracing)
+2. add multi-file session management
+3. add snapshot diffing / incremental sync
+4. add Figma REST API integration for team library browsing

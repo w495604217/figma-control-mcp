@@ -14,7 +14,7 @@ The result is a system that can read, plan, execute, verify, and recover changes
 
 ## Project Status
 
-This repository is currently published as `0.1.0-beta`.
+This repository is currently published as `0.1.0`.
 
 That means:
 
@@ -24,7 +24,7 @@ That means:
 - session resilience, instance overrides, and trace/replay foundations are now in place
 - the library layer is still constrained by current Figma platform limits
 
-This is not yet a full Pencil-equivalent implementation, but it is already a practical beta for real design automation workflows.
+This is not yet a full Pencil-equivalent implementation, but it is already a practical stable foundation for real design automation workflows.
 
 ## What This Project Is
 
@@ -100,7 +100,7 @@ Figma Plugin Worker   talk-to-figma Relay
    only where Figma APIs stop
 ```
 
-## Implemented in `0.1.0-beta`
+## Implemented in `0.1.0`
 
 ### Core bridge and session model
 

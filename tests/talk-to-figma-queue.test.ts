@@ -149,7 +149,136 @@ describe("executeTalkToFigmaSessionQueue", () => {
     const snapshot = await store.getSnapshot("talk-to-figma:canvas-room");
     expect(snapshot?.nodes[0]?.id).toBe("node-created");
     expect(executeCommand).toHaveBeenCalled();
+
+    // After sync, sessionHealth should be active (not "unknown")
+    // because upsertSnapshot updates lastHeartbeatAt on the session
+    expect(result.sessionHealth).toBe("active");
   });
+
+  it("returns active sessionHealth after successful sync even when pre-execution health was unknown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "figma-control-talk-queue-health-"));
+    const store = new BridgeStore(join(dir, "bridge-state.json"));
+    await store.init();
+
+    // Register session WITHOUT connectedAt/lastHeartbeatAt in metadata
+    // Pre-execution health will be unknown because registerSession sets
+    // lastHeartbeatAt automatically, but we manually strip it to simulate
+    // a stale/incomplete session record
+    await store.registerSession({
+      sessionId: "talk-to-figma:health-room",
+      fileName: "HealthTest",
+      metadata: {
+        source: "talk-to-figma",
+        channel: "health-room"
+      }
+    });
+
+    await store.enqueueOperations({
+      sessionId: "talk-to-figma:health-room",
+      operations: [
+        {
+          type: "create_node",
+          node: { type: "FRAME", name: "Health check frame" }
+        }
+      ]
+    });
+
+    const executeCommand = vi.fn(async (input: {
+      command: string;
+      params?: Record<string, unknown>;
+    }) => {
+      if (input.command === "get_variables") {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "health-room",
+          joinedAt: new Date().toISOString(),
+          requestId: "req-vars",
+          command: "get_variables",
+          result: [],
+          progressUpdates: []
+        };
+      }
+
+      const code = typeof input.params?.code === "string" ? input.params.code : "";
+      if (code.includes("figma.commitUndo()")) {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "health-room",
+          joinedAt: new Date().toISOString(),
+          requestId: "req-undo",
+          command: "execute_code",
+          result: { success: true, result: { ok: true } },
+          progressUpdates: []
+        };
+      }
+
+      if (code.includes('"type":"create_node"')) {
+        return {
+          ok: true as const,
+          wsUrl: "ws://127.0.0.1:3055",
+          channel: "health-room",
+          joinedAt: new Date().toISOString(),
+          requestId: "req-op",
+          command: "execute_code",
+          result: {
+            success: true,
+            result: {
+              touchedNodeIds: ["node-health"],
+              result: { createdNodeId: "node-health" }
+            }
+          },
+          progressUpdates: []
+        };
+      }
+
+      // Sync snapshot
+      return {
+        ok: true as const,
+        wsUrl: "ws://127.0.0.1:3055",
+        channel: "health-room",
+        joinedAt: new Date().toISOString(),
+        requestId: "req-sync",
+        command: "execute_code",
+        result: {
+          success: true,
+          result: {
+            fileKey: "file-key-health",
+            fileName: "HealthTest",
+            pageId: "0:1",
+            pageName: "Page 1",
+            selectionIds: [],
+            nodes: [
+              { id: "node-health", name: "Health check frame", type: "FRAME", parentId: "0:1", childIds: [] }
+            ],
+            components: []
+          }
+        },
+        progressUpdates: []
+      };
+    });
+
+    const result = await executeTalkToFigmaSessionQueue({
+      store,
+      sessionId: "talk-to-figma:health-room",
+      client: { executeCommand }
+    });
+
+    expect(result.snapshotSynced).toBe(true);
+    expect(result.processedCount).toBe(1);
+
+    // P1 regression: sessionHealth MUST be "active" after successful sync,
+    // because upsertSnapshot sets lastHeartbeatAt on the session object.
+    // Previously this returned "unknown" because assessSessionHealth was
+    // called on session.metadata instead of the session itself.
+    expect(result.sessionHealth).toBe("active");
+
+    // Double-check: the stored session should have a recent lastHeartbeatAt
+    const storedSession = await store.getSession("talk-to-figma:health-room");
+    expect(storedSession?.lastHeartbeatAt).toBeDefined();
+  });
+
   it("propagates skipped status and batches through the queue pipeline", async () => {
     const dir = await mkdtemp(join(tmpdir(), "figma-control-talk-queue-skip-"));
     const store = new BridgeStore(join(dir, "bridge-state.json"));

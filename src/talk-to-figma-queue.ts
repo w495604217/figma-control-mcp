@@ -179,8 +179,11 @@ export async function executeTalkToFigmaSessionQueue(input: ExecuteTalkToFigmaQu
   let sessionHealth: SessionHealth;
   if (snapshotSynced) {
     const freshSession = await input.store.getSession(input.sessionId);
-    const freshMeta = asRecord(freshSession?.metadata) ?? {};
-    sessionHealth = assessSessionHealth(freshMeta, 5 * 60 * 1000).health;
+    if (freshSession) {
+      sessionHealth = assessSessionHealth(freshSession, 5 * 60 * 1000).health;
+    } else {
+      sessionHealth = preExecHealth;
+    }
   } else {
     sessionHealth = preExecHealth;
   }

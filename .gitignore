@@ -2,10 +2,10 @@ node_modules/
 dist/
 plugin-dist/
 .figma-control-mcp/
+.figma-control/
 coverage/
 *.log
 .DS_Store
 tmp/
 .env
 .env.*
-

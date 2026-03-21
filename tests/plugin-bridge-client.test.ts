@@ -446,4 +446,149 @@ describe("PluginBridgeClient", () => {
     expect(batch.failedIds).toEqual([]);
     expect(batch.skippedIds).toEqual([]);
   });
+
+  // ─── Trace retrieval client surface ─────────────────────────────────────
+
+  it("getTraces returns seeded traces via the typed client", async () => {
+    const { client, store } = await createClientHarness();
+
+    // Seed a trace directly into the store's trace store
+    const traceStore = await store.getTraceStore();
+    const { createTraceContext, recordTrace } = await import("../src/trace-store.js");
+    const ctx = createTraceContext(traceStore);
+    recordTrace(ctx!, {
+      flowType: "ensure-session",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      sessionId: "trace-client-test",
+      input: { sessionId: "trace-client-test" },
+      output: { strategy: "existing-session" },
+    });
+    await store.persistTraces();
+
+    const result = await client.getTraces();
+    expect(result.count).toBeGreaterThanOrEqual(1);
+    expect(result.traces.length).toBeGreaterThanOrEqual(1);
+    const found = result.traces.find((t) => t.flowType === "ensure-session");
+    expect(found).toBeDefined();
+    expect(found!.status).toBe("succeeded");
+    expect(found!.traceId).toBeDefined();
+  });
+
+  it("getTraces with flowType filter returns only matching traces", async () => {
+    const { client, store } = await createClientHarness();
+    const traceStore = await store.getTraceStore();
+    const { createTraceContext, recordTrace } = await import("../src/trace-store.js");
+
+    // Seed two traces of different flow types
+    const ctx1 = createTraceContext(traceStore);
+    recordTrace(ctx1!, {
+      flowType: "ensure-session",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      input: {},
+      output: {},
+    });
+    const ctx2 = createTraceContext(traceStore);
+    recordTrace(ctx2!, {
+      flowType: "queue-execution",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      input: {},
+      output: {},
+    });
+    await store.persistTraces();
+
+    const filtered = await client.getTraces({ flowType: "ensure-session" });
+    expect(filtered.count).toBeGreaterThanOrEqual(1);
+    expect(filtered.traces.every((t) => t.flowType === "ensure-session")).toBe(true);
+  });
+
+  it("getTrace returns a single trace by ID", async () => {
+    const { client, store } = await createClientHarness();
+    const traceStore = await store.getTraceStore();
+    const { createTraceContext, recordTrace } = await import("../src/trace-store.js");
+
+    const ctx = createTraceContext(traceStore);
+    recordTrace(ctx!, {
+      flowType: "queue-execution",
+      startedAt: new Date().toISOString(),
+      status: "failed",
+      input: { sessionId: "q-test" },
+      output: {},
+      errors: ["test error"],
+    });
+    await store.persistTraces();
+
+    const traces = await client.getTraces();
+    const target = traces.traces.find((t) => t.flowType === "queue-execution");
+    expect(target).toBeDefined();
+
+    const single = await client.getTrace(target!.traceId);
+    expect(single.traceId).toBe(target!.traceId);
+    expect(single.flowType).toBe("queue-execution");
+    expect(single.status).toBe("failed");
+    expect(single.errors).toContain("test error");
+  });
+
+  it("getTrace throws for a non-existent trace ID", async () => {
+    const { client } = await createClientHarness();
+    await expect(client.getTrace("non-existent-id")).rejects.toThrow(/not found/i);
+  });
+
+  it("getTraceTree returns a parent and its children", async () => {
+    const { client, store } = await createClientHarness();
+    const traceStore = await store.getTraceStore();
+    const { createTraceContext, recordTrace } = await import("../src/trace-store.js");
+
+    // Create parent trace
+    const parentCtx = createTraceContext(traceStore);
+    recordTrace(parentCtx!, {
+      flowType: "materialize-asset",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      input: { query: "Button" },
+      output: {},
+    });
+
+    // Create child traces linked to parent
+    const childCtx1 = createTraceContext(traceStore, parentCtx!.traceId);
+    recordTrace(childCtx1!, {
+      flowType: "ensure-session",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      input: {},
+      output: {},
+    });
+    const childCtx2 = createTraceContext(traceStore, parentCtx!.traceId);
+    recordTrace(childCtx2!, {
+      flowType: "queue-execution",
+      startedAt: new Date().toISOString(),
+      status: "succeeded",
+      input: {},
+      output: {},
+    });
+    await store.persistTraces();
+
+    const tree = await client.getTraceTree(parentCtx!.traceId);
+    expect(tree.traceId).toBe(parentCtx!.traceId);
+    expect(tree.count).toBeGreaterThanOrEqual(3); // parent + 2 children
+    expect(tree.tree.length).toBeGreaterThanOrEqual(3);
+
+    const flowTypes = tree.tree.map((t) => t.flowType).sort();
+    expect(flowTypes).toContain("materialize-asset");
+    expect(flowTypes).toContain("ensure-session");
+    expect(flowTypes).toContain("queue-execution");
+
+    // Children should link to parent
+    const children = tree.tree.filter((t) => t.traceId !== parentCtx!.traceId);
+    for (const child of children) {
+      expect(child.parentTraceId).toBe(parentCtx!.traceId);
+    }
+  });
+
+  it("getTraceTree throws for a non-existent trace ID", async () => {
+    const { client } = await createClientHarness();
+    await expect(client.getTraceTree("non-existent-id")).rejects.toThrow(/not found/i);
+  });
 });

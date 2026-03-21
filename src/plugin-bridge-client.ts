@@ -5,6 +5,7 @@ import type {
   FigmaSnapshot,
   FigmaSession
 } from "./schemas.js";
+import type { TraceRecord, TraceFlowType } from "./trace-store.js";
 
 type BridgeClientOptions = {
   baseUrl?: string;
@@ -514,6 +515,55 @@ export class PluginBridgeClient {
       body: input
     });
   }
+
+  // ─── Trace retrieval ──────────────────────────────────────────────────
+
+  /**
+   * Get recent traces, optionally filtered by flow type.
+   *
+   * Maps to `GET /bridge/traces?limit=N&flowType=...`
+   */
+  async getTraces(input: {
+    limit?: number;
+    flowType?: TraceFlowType;
+  } = {}): Promise<{
+    traces: TraceRecord[];
+    count: number;
+  }> {
+    const params = new URLSearchParams();
+    if (typeof input.limit === "number") {
+      params.set("limit", String(input.limit));
+    }
+    if (input.flowType) {
+      params.set("flowType", input.flowType);
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.request(`/bridge/traces${suffix}`, { method: "GET" });
+  }
+
+  /**
+   * Get a single trace record by ID.
+   *
+   * Maps to `GET /bridge/traces/:traceId`
+   */
+  async getTrace(traceId: string): Promise<TraceRecord> {
+    return this.request(`/bridge/traces/${encodeURIComponent(traceId)}`, { method: "GET" });
+  }
+
+  /**
+   * Get a trace and all its descendant traces (parent→child linkage).
+   *
+   * Maps to `GET /bridge/traces/:traceId/tree`
+   */
+  async getTraceTree(traceId: string): Promise<{
+    traceId: string;
+    tree: TraceRecord[];
+    count: number;
+  }> {
+    return this.request(`/bridge/traces/${encodeURIComponent(traceId)}/tree`, { method: "GET" });
+  }
+
+  // ─── Internal ─────────────────────────────────────────────────────────
 
   private async request<T>(path: string, init: { method: string; body?: unknown }): Promise<T> {
     const response = await this.fetchFn(`${this.baseUrl}${path}`, {

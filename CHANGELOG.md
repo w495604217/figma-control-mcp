@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0
+
+- added typed trace client surface (`getTraces`, `getTrace`, `getTraceTree`) to `PluginBridgeClient`
+- added trace debugging guide (`docs/TRACE_DEBUGGING.md`)
+- added live validation guide (`docs/LIVE_VALIDATION.md`)
+- added `0.1.0` stable release gate to `docs/RELEASE_GATES.md`
+- updated version references and release documentation for stable release
+
 ## 0.1.0-beta
 
 - added deterministic library indexing and import strategy reporting

@@ -6,7 +6,7 @@ The goal is not to claim feature parity too early.
 
 The goal is to move from:
 
-- a strong hybrid beta
+- a strong hybrid control layer
 
 to:
 
@@ -90,6 +90,21 @@ Expected outcomes:
 - stronger import workflows
 - clear acceptance criteria for “production beta”
 
+## `0.1.0`
+
+Focus:
+
+- formalize the stable release baseline
+- validate the live bridge and trace surface end-to-end
+- document platform constraints without overstating parity
+
+Expected outcomes:
+
+- stable typed client surface
+- stable trace retrieval and debugging workflow
+- stable live-validation playbook
+- explicit release gate for future post-0.1.0 work
+
 ## High-ROI Workstreams
 
 ### 1. Library Index Layer
@@ -137,3 +152,16 @@ Why it matters:
 
 - makes debugging and contribution far easier
 - creates a better open-source collaboration surface
+
+---
+
+## Milestone: `0.1.0` (Stable)
+
+Acceptance criteria:
+
+- all 6 core phases accepted and merged
+- typed trace client surface available via `PluginBridgeClient`
+- live validation procedure documented (`docs/LIVE_VALIDATION.md`)
+- trace debugging guide available (`docs/TRACE_DEBUGGING.md`)
+- all automated tests pass, builds clean, type checks pass
+- documentation honestly describes stable features, platform constraints, and deferred items

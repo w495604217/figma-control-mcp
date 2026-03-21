@@ -124,3 +124,47 @@ Use the following review structure before each release:
 4. Which release gate is being claimed
 5. Whether the claim is accepted or rejected
 
+---
+
+## Gate: `0.1.0` (Stable)
+
+Goal: promote `0.1.0-beta` to a stable `0.1.0` after closing remaining release gaps.
+
+### What is stable in 0.1.0
+
+- Library index with local + published component search
+- Selector/query layer with runtime batch resolution
+- Transactional queue with per-batch rollback
+- Session resilience with stale detection, self-healing, and health reporting
+- Instance overrides (variant selection, text overrides, component property overrides)
+- Structured tracing with persist/reload, parent-child trees, and typed client surface
+- Desktop panel fallback for asset materialization
+- Typed client (`PluginBridgeClient`) covering all HTTP routes including trace retrieval
+
+### What is constrained by Figma platform
+
+- Published component import requires desktop panel fallback (Figma Plugin API limitation)
+- Runtime variant switching post-insert is best-effort (Figma doesn't expose a reliable API)
+- Component property overrides require matching property names from Figma's runtime schema
+
+### What is deferred to post-0.1.0
+
+- Distributed tracing / external telemetry
+- Multi-file session management
+- Snapshot diffing / incremental sync
+- Figma REST API integration for team library browsing
+
+### Required validation
+
+- All automated tests pass (`npm test`)
+- All builds clean (`npm run build`, `npm run typecheck:plugin`, `npm run build:plugin`)
+- Live validation pass documented (see `docs/LIVE_VALIDATION.md`)
+- Trace debugging verified (see `docs/TRACE_DEBUGGING.md`)
+- Release documentation honest about constraints and deferrals
+
+### Reject if
+
+- Any automated test fails
+- Build or type-check produces errors
+- Documentation claims capabilities the code does not support
+- Tracing persists only on success (must also persist failure traces)
