@@ -44,7 +44,7 @@ async function resolveSourceFileKey(store: BridgeStore, sourceSessionId?: string
 export function createServer(store: BridgeStore): McpServer {
   const server = new McpServer({
     name: "figma-control-mcp",
-    version: "0.1.0"
+    version: "0.1.1"
   });
   const figmaPluginMenuClient = new FigmaPluginMenuClient();
   const talkToFigmaClient = new TalkToFigmaClient();

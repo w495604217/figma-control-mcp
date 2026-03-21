@@ -1,6 +1,6 @@
 {
   "name": "figma-control-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "A Pencil-like hybrid MCP control layer for Figma: silent canvas execution plus library-aware desktop fallback.",
   "homepage": "https://github.com/w495604217/figma-control-mcp",

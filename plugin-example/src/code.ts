@@ -1,7 +1,7 @@
 const SESSION_PLUGIN_DATA_KEY = "figma-control-mcp-session-id";
 const BRIDGE_BASE_URL = "http://127.0.0.1:3847";
-const PLUGIN_VERSION = "0.1.0";
-const BRIDGE_VERSION = "0.1.0";
+const PLUGIN_VERSION = "0.1.1";
+const BRIDGE_VERSION = "0.1.1";
 const POLL_INTERVAL_MS = 1500;
 const UI_HTML = `<!doctype html>
 <html lang="en">

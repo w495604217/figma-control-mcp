@@ -40,8 +40,8 @@ When the plugin starts, it should immediately register with the local HTTP bridg
   "pageId": "<current page id>",
   "pageName": "<current page name>",
   "selectionIds": ["..."],
-  "pluginVersion": "0.1.0",
-  "bridgeVersion": "0.1.0"
+  "pluginVersion": "0.1.1",
+  "bridgeVersion": "0.1.1"
 }
 ```
 

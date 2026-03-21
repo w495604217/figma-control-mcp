@@ -14,7 +14,7 @@ The result is a system that can read, plan, execute, verify, and recover changes
 
 ## Project Status
 
-This repository is currently published as `0.1.0`.
+This repository is currently published as `0.1.1`.
 
 That means:
 
@@ -110,7 +110,7 @@ Figma Plugin Worker   talk-to-figma Relay
    only where Figma APIs stop
 ```
 
-## Implemented in `0.1.0`
+## Implemented in `0.1.1`
 
 ### Core bridge and session model
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- added Antigravity integration setup documentation (`docs/ANTIGRAVITY_SETUP.md`)
+- added an Antigravity MCP configuration example (`examples/antigravity-mcp.config.toml`)
+- added a launch helper for external Antigravity MCP use (`scripts/run-antigravity-mcp.sh`)
+- linked Antigravity setup from the main README
+
 ## 0.1.0
 
 - added typed trace client surface (`getTraces`, `getTrace`, `getTraceTree`) to `PluginBridgeClient`
